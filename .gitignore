@@ -1,0 +1,33 @@
+# --- Claude Code and Superpowers ---
+# This scaffold is itself a Claude Code project, so it ignores the same paths it
+# teaches a target repository to ignore. install.sh appends this block there.
+
+# Isolated workspaces created by superpowers:using-git-worktrees. An unignored
+# worktree directory commits a whole second checkout into the repository.
+.worktrees/
+worktrees/
+
+# The subagent-driven-development workspace: task briefs, implementer reports,
+# review packages, and the progress ledger. Scratch, not history.
+.superpowers/
+
+# Local, per-machine Claude Code settings. settings.json is shared and tracked;
+# this one is not.
+.claude/settings.local.json
+settings.local.json
+
+# --- OS and editor noise ---
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.idea/
+.vscode/
+
+# --- Scratch ---
+tmp/
+*.log
