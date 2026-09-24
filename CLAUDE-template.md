@@ -22,9 +22,9 @@ when releases come from a separate branch. For a solo repo where you own `main`,
 This is the internal operating manual for this repository. Claude reads it first, in every
 session. `README.md` is the public document. `docs/` holds the long-form detail.
 
-**Companion files in `.claude/` enforce parts of this manual. Do not delete them:** the
-permission rules and hook registrations in `settings.json`, the `hooks/`, the subagent
-tool grants in `agents/`, the `scripts/`, and the `skills/`.
+**Companion files in `.claude/` enforce parts of this manual:** the permission rules and
+hook registrations in `settings.json`, the `hooks/`, the subagent tool grants in
+`agents/`, the `scripts/`, and the `skills/`. Delete one only with its mentions here.
 
 ## Project
 
@@ -252,5 +252,5 @@ diagnosis, say why and wait for a yes.
   skill holds the full rule set. Never claim STE compliance: that needs the ASD dictionary.
 - Be concise. Cut a word that does not change the meaning. Keep a word the grammar needs.
 - Do not use an em-dash in prose. Use a comma, a semicolon, or a colon.
-- Use kebab-case for every new file and folder.
-- Research reports use MLA citations and end with a full MLA bibliography.
+- Name new files and folders in {{kebab-case, or the language's own convention}}.
+- Research reports cite in {{MLA | APA | plain links}} and end with a full source list.

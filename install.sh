@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — copy this scaffold into a target repository.
+# install.sh: copy this scaffold into a target repository.
 #
 # Usage:
 #   ./install.sh <target-repo>            install the FULL CLAUDE.md variant

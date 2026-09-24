@@ -71,7 +71,7 @@ agents/
   reviewer.md                 read-only. No shell. For spec and quality review.
   implementer.md              writes inside one named scope. Runs tests. Commits.
 hooks/
-  block-subagent-git.sh       limits which git commands a subagent may run
+  block-subagent-git.sh       limits a subagent's git; blocks destructive git for all
   session-start-git-context.sh  shows each new session the work already in its checkout
 scripts/
   check-claude-md.sh          verifies a filled-in install
@@ -352,10 +352,14 @@ Stated plainly, because a scaffold that oversells its guarantees is worse than n
   Treat them as a guard against a slip, never as containment. Run genuinely untrusted work
   in a sandbox or a container. Claude Code's own `sandbox` setting limits where Bash may
   write, and is worth turning on per project.
-- **The `Read` deny rules cover the Read tool only.** They keep `.env`, `.env.local`,
-  `.env.production`, keys, and credentials out of a `Read` call at any depth, and they
-  leave `.env.example` readable, because the manual tells the agent to read it. They do not
-  stop `cat .env` through Bash.
+- **The `Read` deny rules are a file-tool guard, not a secret store.** They keep `.env`
+  and its variants, SSH and TLS keys, and token files such as `.npmrc` and `.netrc` out of
+  a `Read` call at any depth. Claude Code applies them to Grep and Glob on a best-effort
+  basis. They leave `.env.example` readable, because the manual tells the agent to read
+  it. Do not count on them to stop `cat .env` through Bash.
+- **The `researcher` can read files and fetch URLs.** It has no shell and no write tools,
+  but a page it fetches can hold a prompt injection that tells it to put a file's contents
+  into a URL it then fetches. Give it a narrow brief, and keep secrets out of the tree.
 - **The hook fails closed for a subagent git command, and open for everything else.** If
   it cannot read a subagent command that mentions git, or python3 is missing, it blocks.
   For the main session, and for a subagent command with no git in it, it allows. A hook
@@ -437,7 +441,7 @@ It verifies:
 ## Keeping up with plugin changes
 
 The alignment above is pinned to a version, not to a promise. When you update the
-`superpowers` plugin, three things are worth re-checking, because they are what the
+`superpowers` plugin, five things are worth re-checking, because they are what the
 scaffold depends on:
 
 1. **The document paths** in `superpowers:brainstorming` and `superpowers:writing-plans`.

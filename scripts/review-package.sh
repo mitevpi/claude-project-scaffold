@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# review-package.sh — write one commit range to a file for a reviewer.
+# review-package.sh: write one commit range to a file for a reviewer.
 #
 # Usage:
 #   .claude/scripts/review-package.sh <base> <head>
 #
-# It writes the commit list, the diff stat, and the full diff of base..head to
-# .superpowers/reviews/<base>-<head>.md, and prints that file's path.
+# It writes the commit list, the diff stat, and the full diff of base...head
+# (from the merge base) to .superpowers/reviews/<base>-<head>.md, and prints
+# that file's path.
 #
 # Why it exists: the reviewer agent holds no shell, so that it cannot change
 # anything. But superpowers:requesting-code-review hands its reviewer a

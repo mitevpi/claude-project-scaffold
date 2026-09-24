@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# self-test.sh — the scaffold's own test suite.
+# self-test.sh: the scaffold's own test suite.
 #
 # Run it from the scaffold repository root: ./self-test.sh
 #
@@ -143,7 +143,9 @@ def denied(path):
             return True
     return False
 must = [".env", ".env.local", ".env.production", "api/.env", "api/.env.local",
-        "certs/server.pem", "certs/server.key", "id_rsa", "config/credentials.json"]
+        "certs/server.pem", "certs/server.key", "id_rsa", "config/credentials.json",
+        "keys/id_ed25519", "keys/id_ecdsa", "certs/client.p12", "certs/client.pfx",
+        ".npmrc", "web/.npmrc", ".pypirc", ".netrc", ".envrc", "ops/.aws/credentials"]
 must_not = [".env.example", "api/.env.example", ".env.sample", "src/env.ts"]
 wrong = [p for p in must if not denied(p)] + ["(readable) " + p for p in must_not if denied(p)]
 print(" ".join(wrong))

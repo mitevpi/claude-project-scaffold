@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# land-branch.sh — land one finished branch on its base branch, safely.
+# land-branch.sh: land one finished branch on its base branch, safely.
 #
 # Usage:
 #   .claude/scripts/land-branch.sh <branch> <base> [-C <repo>]
