@@ -273,7 +273,7 @@ it. For a subagent:
 | --- | --- |
 | `status`, `diff`, `log`, `show`, `rev-parse`, `merge-base`, `check-ignore`, and the other read commands | `push`, `checkout`, `switch`, `restore`, `merge`, `rebase`, `reset`, `cherry-pick`, `revert`, `clean`, `tag` |
 | `branch` (listing), `worktree list`, `stash list` and `show`, `remote -v` and `get-url`, `reflog` | creating, moving, or deleting a branch, worktree, stash, or remote; `reflog expire` |
-| `git add <explicit path>` | `git add -A`, `--all`, `-u`, `-f`, `-p`; a pathspec for the whole tree: `.`, `..`, `:/`, `:(top)`, a glob, `"$PWD"` |
+| `git add`, `git rm`, `git mv` of explicit paths | `git rm -f`, `git mv -f`; `git add -A`, `--all`, `-u`, `-f`, `-p`; a pathspec for the whole tree: `.`, `..`, `:/`, `:(top)`, a glob, `"$PWD"` |
 | `git commit -m "..."` | `git commit` with `-a`, `-n`, `--no-verify`, `--amend`, or a pathspec such as `.` |
 | `git config --get`, `--list` | `git config <name> <value>`; `core.hooksPath` through `-c`, `--config-env`, or `GIT_CONFIG_*`; `HUSKY=0` |
 | `git -C <path> ...`, `cd <path> && git ...` | `land-branch.sh`, which rebases and deletes a branch out of the hook's sight |

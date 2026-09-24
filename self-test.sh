@@ -346,6 +346,18 @@ expect allow sub 'git commit -S -m "x"'
 expect allow sub 'git commit -qm "x"'
 expect allow sub 'git commit -m "fix: the --amend flag and the -a flag in the docs"'
 expect allow sub 'git -c core.quotepath=off status'
+# An implementer renames and deletes files inside its scope. git mv and
+# git rm on explicit paths stage exactly that change.
+expect allow sub 'git mv src/a.ts src/b.ts'
+expect allow sub 'git rm src/old.ts'
+expect allow sub 'git rm --cached build/out.js'
+expect allow sub 'git rm -r src/legacy'
+expect block sub 'git rm -r .'
+expect block sub 'git rm -f src/old.ts'
+expect block sub 'git rm --forc src/old.ts'
+expect block sub "git rm ':(top)'"
+expect block sub 'git mv -f src/a.ts src/b.ts'
+expect block sub 'git mv src/a.ts'
 expect allow sub 'git show-ref'
 expect allow sub 'git ls-remote origin'
 expect allow sub '"$PYTHON" -m pytest'
