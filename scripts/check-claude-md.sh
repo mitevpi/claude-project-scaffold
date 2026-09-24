@@ -90,6 +90,7 @@ for path in \
   ".claude/hooks/block-subagent-git.sh" \
   ".claude/hooks/session-start-git-context.sh" \
   ".claude/scripts/land-branch.sh" \
+  ".claude/scripts/review-package.sh" \
   ".claude/agents/researcher.md" \
   ".claude/agents/reviewer.md" \
   ".claude/agents/implementer.md" \
@@ -238,7 +239,21 @@ else
   bad ".gitignore is missing. It must cover .worktrees/ and .superpowers/"
 fi
 
-# --- 9. docs tree ------------------------------------------------------------
+# --- 9. No personal skill shadows a project skill -----------------------------
+# Claude Code ranks a personal skill (~/.claude/skills/<name>) above a project
+# skill with the same name, so the project copy silently never runs on this
+# machine. Teammates without the personal copy run the project one. Two people
+# then follow two different procedures under one name.
+for skill in "$ROOT"/.claude/skills/*/SKILL.md; do
+  [ -f "$skill" ] || continue
+  name=$(basename "$(dirname "$skill")")
+  personal="${HOME:-}/.claude/skills/$name/SKILL.md"
+  if [ -f "$personal" ] && ! cmp -s "$skill" "$personal"; then
+    caution "the personal skill ~/.claude/skills/$name shadows .claude/skills/$name, and they differ. Delete or re-sync the personal copy."
+  fi
+done
+
+# --- 10. docs tree -----------------------------------------------------------
 [ -f "$ROOT/docs/index.md" ] && ok "docs/index.md" || caution "docs/index.md is missing"
 for dir in "docs/superpowers/specs" "docs/superpowers/plans"; do
   [ -d "$ROOT/$dir" ] && ok "$dir/" || caution "$dir/ is missing. Superpowers writes there."

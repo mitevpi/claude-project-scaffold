@@ -1,6 +1,6 @@
 ---
 name: parallel-agent-safety
-description: The isolation and safety policy for running more than one agent at the same time in this repository. Load it together with superpowers:dispatching-parallel-agents, which holds the dispatch pattern. This skill holds what that pattern does not: how to partition work by writer, how to isolate each writing agent, the concurrency cap, what a subagent may and may not do to git, and how to land a wave one branch at a time.
+description: The isolation and safety policy for running more than one agent at the same time. Load it together with superpowers:dispatching-parallel-agents, which holds the dispatch pattern. This skill holds what that pattern does not: how to partition work by writer, how to isolate each writing agent, the concurrency cap, what a subagent may and may not do to git, and how to land a wave one branch at a time.
 ---
 
 # Parallel agent safety
@@ -10,17 +10,19 @@ how to scope an agent, how to write a prompt, and how to review what returns. Re
 first. It is the procedure.
 
 This skill holds the isolation policy that the procedure does not cover. Load both.
-CLAUDE.md section 5 holds the absolute rules, and they bind whether or not you read
-either file.
+Where the repository's `CLAUDE.md` states absolute rules for parallel work, they
+bind whether or not you read either file, and they override this skill.
 
 Three controls protect a wave. They differ in strength.
 
-1. **Mechanical.** The deny rules in `.claude/settings.json` and the
-   `block-subagent-git` hook. A subagent may read history, stage explicit paths, and
+1. **Mechanical.** Deny rules in `.claude/settings.json` and a git-blocking hook such
+   as `block-subagent-git`, where the repository configures them. A subagent may read
+   history, stage explicit paths, and
    commit its own work. It cannot push, branch, merge, rebase, reset, checkout, stash,
    clean, tag, or create a worktree.
-2. **Configured.** The agents in `.claude/agents/`. A `researcher` and a `reviewer`
-   hold no write tools, so they cannot write.
+2. **Configured.** The agents a repository may define in `.claude/agents/`, where a
+   `researcher` and a `reviewer` hold no write tools, so they cannot write. Where a
+   repository defines none, use the harness's own available agent types instead.
 3. **Written.** The rules in CLAUDE.md and in each brief.
 
 Prefer control 1, then 2, then 3. A rule in a prompt is the weakest of the three. Never
@@ -59,7 +61,7 @@ A partition you cannot write down is a partition you do not have.
 
 ## Step 3: Set the concurrency
 
-- Write-capable agents: the cap in CLAUDE.md section 5, normally three.
+- Write-capable agents: the repository's stated cap if it has one, otherwise three.
 - Read-only agents: more is safe. Three to five is a common working range.
 
 A cheaper model does not raise the cap. A cheap model needs a tighter scope, not a
@@ -104,8 +106,8 @@ Each brief carries five things.
    the list is complete.
 3. **The contracts.** What it must not change, and the signatures it must respect.
 4. **The output format.** What it must return, and in what shape.
-5. **The verification.** The exact test and lint commands to run, from CLAUDE.md
-   section 2.
+5. **The verification.** The exact test and lint commands to run, taken from the
+   repository's CLAUDE.md or its README.
 
 Add one line to every brief: the agent cannot see the other agents and must not assume
 their results.
@@ -113,7 +115,8 @@ their results.
 Hand a large input over as a file path, not as pasted text. Everything you paste into a
 brief stays in your context for the rest of the session.
 
-Pick the agent type by role.
+Pick the agent type by role, using these names where `.claude/agents/` defines them;
+otherwise pick the harness's own closest available agent type for each role.
 
 | Role | Agent | Model |
 | --- | --- | --- |
@@ -124,6 +127,11 @@ Pick the agent type by role.
 When a Superpowers skill supplies a prompt template for the role, use that template as
 the brief and dispatch it on the matching agent above. The template is the content. The
 agent definition is the tool grant.
+
+A `reviewer` with no shell cannot run the `git diff` that a review template asks for.
+Write the range to a file first, with `.claude/scripts/review-package.sh <base> <head>`
+where the repository has it, and put the printed path in the brief in place of the git
+commands.
 
 ## Step 6: Land the wave
 

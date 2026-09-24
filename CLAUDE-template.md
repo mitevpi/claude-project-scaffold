@@ -139,6 +139,9 @@ allows exactly that. Section 5 holds the boundary.
 - When a Superpowers skill supplies a prompt template, that template is the brief. Use
   `.claude/agents/implementer.md` or `.claude/agents/reviewer.md` as the container that
   grants the tools. The model named at dispatch overrides the file's `model:` field.
+- The `reviewer` holds no shell. Before any review that the SDD scripts do not package,
+  run `.claude/scripts/review-package.sh <base> <head>` and give the reviewer the printed
+  path in place of the template's git commands.
 - Name a model tier, never a pinned version string. The tiers outlive the version
   names. Per-task review: {{a mid tier}}. Whole-branch review: {{the most capable
   tier}}. Do not ask which; the plugin already requires both reviews.
@@ -187,7 +190,8 @@ names the one place the two differ on mechanics.
   tests pass. Do not batch unrelated changes. Do not leave finished work uncommitted.
 - **The commit belongs to the repo owner.** Never add a `Co-Authored-By: Claude` trailer,
   a "Generated with Claude Code" line, or any other self-attribution. Leave the author
-  and committer as the configured git signature. This overrides the harness default.
+  and committer as the configured git signature. The `attribution` block in
+  `settings.json` turns the harness default off. This rule covers what it misses.
 - **Stage explicit paths. Do not run `git add -A`.** Blanket staging collects scratch
   files, local config, and secrets.
 - **Message format:** {{conventional commits | plain imperative subject}}. Keep the subject
@@ -242,8 +246,9 @@ and any subagent prompt.
   explicit paths, and commit. It may not push, branch, merge, rebase, reset, checkout,
   stash, clean, tag, or create a worktree. The orchestrator owns every one of those, and
   the hook enforces the line.
-- **No subagent spawns a subagent.** One level of fan-out only. A reviewer that an
-  implementer spawned is a defect to report, not extra assurance.
+- **No subagent spawns a subagent.** One level of fan-out only. `settings.json` sets
+  `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` to 1, which withholds the `Agent` tool from
+  every subagent. A reviewer that an implementer spawned is a defect to report.
 - **Grant tools. Do not request behaviour.** Use `researcher`, `reviewer`, and
   `implementer` from `.claude/agents/`. "Do not edit" in a prompt is a preference, not a
   control.

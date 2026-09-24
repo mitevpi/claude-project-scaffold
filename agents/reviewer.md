@@ -30,4 +30,4 @@ The model named in your dispatch overrides the `model:` field above. The orchest
 
 `superpowers:subagent-driven-development` and `superpowers:requesting-code-review` carry their own reviewer prompt templates. When the orchestrator dispatches you with one of those, the template is your instruction set and it takes precedence over this file. This file only grants your tools and sets the writing rules.
 
-Those templates hand you a review package file: a commit list, a diff stat, and the full diff. Read that file. Do not re-derive the diff, because you hold no shell.
+You hold no shell, so you cannot run the `git diff`, `git log`, or `git worktree add` that a template may ask for. Your brief must name a review package file instead: a commit list, a diff stat, and the full diff. Read that file. When the brief names no package, stop and report that you need one. Do not review from memory or from a partial read of the source.

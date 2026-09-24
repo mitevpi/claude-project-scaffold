@@ -75,6 +75,7 @@ hooks/
 scripts/
   check-claude-md.sh          verifies a filled-in install
   land-branch.sh              lands a finished branch, and refuses rather than lose work
+  review-package.sh           writes a commit range to a file for the shell-less reviewer
 skills/
   parallel-agent-safety/      isolation policy for running agents concurrently
   ste-writing/                the ASD-STE100 Simplified Technical English rules
@@ -93,9 +94,10 @@ the time" is not a control when the failure mode is a destroyed working tree.
 So the scaffold states every rule three times, at three different strengths, and it says
 which layer is doing the work.
 
-1. **Mechanical.** `settings.json` deny rules and the `block-subagent-git` hook. These
-   run outside the model. `git reset --hard` and `rm -rf` are denied. `git push` and
-   `npm install` ask first. A subagent cannot push, branch, merge, or rebase at all.
+1. **Mechanical.** `settings.json` deny rules and settings, and the two hooks. These
+   run outside the model. `git reset --hard`, forced worktree removal, and `rm -rf` are
+   denied. `git push` and `npm install` ask first. A subagent cannot push, branch, merge,
+   or rebase at all, and it cannot spawn a subagent of its own.
 2. **Configured.** The agent definitions in `agents/`. A `researcher` and a `reviewer`
    hold no write tools and no shell, so they cannot write a file even when told to. This
    is a property of the configuration, not of the agent's cooperation.
@@ -214,7 +216,8 @@ they do not read as drift.
    fast-forwards instead, to keep each diff linear against a protected `main`.
 2. **Commit attribution.** No `Co-Authored-By: Claude` trailer and no "Generated with
    Claude Code" line. The commit belongs to the repo owner. This overrides the harness
-   default rather than the plugin.
+   default rather than the plugin, and it is mechanical: the `attribution` block in
+   `settings.json` sets both lines to empty strings.
 
 ### The git hook, and why it allows a commit
 
@@ -228,14 +231,21 @@ it. For a subagent:
 
 | Allowed | Blocked |
 | --- | --- |
-| `status`, `diff`, `log`, `show`, `rev-parse`, and the other read commands | `push`, `checkout`, `switch`, `restore`, `branch`, `merge`, `rebase`, `reset`, `cherry-pick`, `revert`, `clean`, `stash`, `tag`, `worktree` |
-| `git add <explicit path>` | `git add -A`, `--all`, `-u`, `.`, `:/` |
-| `git commit -m "..."` | `git commit` with `-a`, `-n`, `--no-verify`, or `--amend` |
+| `status`, `diff`, `log`, `show`, `rev-parse`, `merge-base`, `check-ignore`, and the other read commands | `push`, `checkout`, `switch`, `restore`, `merge`, `rebase`, `reset`, `cherry-pick`, `revert`, `clean`, `tag` |
+| `branch` (listing), `worktree list`, `stash list` and `show`, `remote -v` and `get-url`, `reflog` | creating, moving, or deleting a branch, worktree, stash, or remote; `reflog expire` |
+| `git add <explicit path>` | `git add -A`, `--all`, `-u`, `-f`, `.`, `..`, `:/`, `*` |
+| `git commit -m "..."` | `git commit` with `-a`, `-n`, `--no-verify`, or `--amend`; `git -c core.hooksPath=...` |
 | `git config --get`, `--list` | `git config <name> <value>` |
+| `git -C <path> ...`, `cd <path> && git ...` | |
 
-The last two rows turn two written rules into mechanical ones. "Stage explicit paths" and
-"never bypass a hook" are now enforced rather than requested. The hook uses an allowlist,
-so a git subcommand it has never heard of is blocked, not permitted.
+The last three rows turn two written rules into mechanical ones. "Stage explicit paths"
+and "never bypass a hook" are now enforced rather than requested. The hook uses an
+allowlist, so a git subcommand it has never heard of is blocked, not permitted.
+
+The hook reads the whole command, not only its first word. A git command is inspected
+wherever it sits: after a path such as `/usr/bin/git`, after `env`, `nohup`, `xargs`, or a
+variable assignment, and inside `$(...)`, backticks, a subshell, a `{ }` group, an `if` or
+`for` body, `bash -c`, `sh -c`, or `eval`. The self-test holds a case for each form.
 
 The main session is never limited by the hook. It holds the branch operations, the merges,
 and the pushes, which is where the owner's review sits.
@@ -256,6 +266,20 @@ templates. The scaffold's `agents/` definitions are compatible, and `CLAUDE.md` 
 division: **the Superpowers template is the brief, and the agent definition is the tool
 grant.** The model named at dispatch overrides the `model:` field in the agent file, so
 the plugin's model-selection guidance still applies.
+
+One template needs a bridge. The SDD task reviewer reads a review package file that the
+plugin's own script writes. The `requesting-code-review` reviewer instead runs `git diff`
+itself, which a shell-less `reviewer` cannot do. `scripts/review-package.sh` writes the
+same kind of file for any range, and the manual tells the orchestrator to run it before
+every such review.
+
+### Skills that share a name with a personal skill
+
+Claude Code ranks a personal skill in `~/.claude/skills/` above a project skill with the
+same name. If you keep your own copy of `parallel-agent-safety` or `ste-writing`, the
+project copy never runs on your machine, while your teammates run the project copy. The
+check script warns when a personal copy differs. Treat the scaffold as the source, and
+delete or re-sync the personal copy.
 
 ## What it is good for
 
@@ -280,9 +304,11 @@ Stated plainly, because a scaffold that oversells its guarantees is worse than n
   command can be spelled another way, moved into a script, or run through an interpreter.
   Treat them as a guard against a slip, never as containment. Run genuinely untrusted work
   in a sandbox or a container.
-- **The hook fails open.** If it cannot parse the payload, it allows the command. A hook
-  that blocked on its own errors would stall every session. That trade-off is deliberate,
-  and it means the hook is a second line of defence rather than a wall.
+- **The hook fails closed for a subagent git command, and open for everything else.** If
+  it cannot read a subagent command that mentions git, or python3 is missing, it blocks.
+  For the main session, and for a subagent command with no git in it, it allows. A hook
+  that blocked on its own errors everywhere would stall every session. It is still a
+  guard against a slip, not a wall: a script file that runs git is invisible to it.
 - **The hook only sees subagents.** It identifies a subagent by fields in the tool
   payload. The main session is unrestricted by design, so the deny rules in
   `settings.json` are what stand between the main session and a destructive command.

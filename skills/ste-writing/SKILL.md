@@ -5,7 +5,7 @@ description: The ASD-STE100 Simplified Technical English writing rules. Load it 
 
 # ASD-STE100 writing rules
 
-CLAUDE.md section 9 holds the short form of this rule. This skill holds the full rule set and the examples.
+This skill holds the full rule set and the examples. Some repositories also carry a short form of this rule in their `CLAUDE.md`; where one exists, it governs and this skill expands on it.
 
 ## What the standard is
 

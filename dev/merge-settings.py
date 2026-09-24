@@ -10,8 +10,9 @@ hooks are merged in instead.
   in their order. Deny still beats allow in Claude Code, so a target's own
   allow rule never weakens a scaffold deny rule.
 - Every hook group whose command the target lacks is appended.
-- Every top-level key the target lacks is added. A key the target already
-  sets is left alone: the target's value is a deliberate choice.
+- Every top-level key the target lacks is added. For an object such as env
+  or attribution, every sub-key the target lacks is added. A value the target
+  already sets is left alone: it is a deliberate choice.
 
 The file is rewritten only when something was added, so a second install
 leaves it byte-identical. Prints the number of additions. Exits 1 on
@@ -56,9 +57,16 @@ for event, groups in src.get("hooks", {}).items():
             added += 1
 
 for key, value in src.items():
+    if key in ("permissions", "hooks"):
+        continue
     if key not in dest:
         dest[key] = value
         added += 1
+    elif isinstance(value, dict) and isinstance(dest[key], dict):
+        for sub, sub_value in value.items():
+            if sub not in dest[key]:
+                dest[key][sub] = sub_value
+                added += 1
 
 if added:
     with open(dest_path, "w") as f:

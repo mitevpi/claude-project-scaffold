@@ -96,6 +96,14 @@ if python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$ROOT/settings.js
 else
   bad "settings.json is not valid JSON"
 fi
+# Two rules that the manual once stated only in prose are settings now.
+setting() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$ROOT/settings.json" "$1" 2>/dev/null; }
+[ "$(setting 'd["env"]["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"]')" = "1" ] \
+  && ok "settings.json stops a subagent from spawning a subagent" \
+  || bad "settings.json does not set CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH to 1"
+[ "$(setting 'd["attribution"]["commit"] == "" and d["attribution"]["pr"] == ""')" = "True" ] \
+  && ok "settings.json hides the commit and pull-request attribution" \
+  || bad "settings.json does not hide attribution"
 echo
 
 # --- 3. The subagent git hook ----------------------------------------------
@@ -153,6 +161,79 @@ expect block sub 'git tag v1.0.0'
 expect block sub 'git worktree add ../worktrees/x'
 expect block sub 'git config user.email nobody@example.com'
 expect block sub 'git status && git push origin main'
+echo
+
+echo "Hook: a git command cannot hide from the hook"
+# Each of these runs a blocked git command. A hook that looks only at the
+# first word of each segment lets every one of them through.
+expect block sub '/usr/bin/git reset --hard HEAD'
+expect block sub 'echo $(git reset --hard HEAD)'
+expect block sub 'echo "$(git stash)"'
+expect block sub 'echo `git stash`'
+expect block sub 'bash -c "git reset --hard HEAD"'
+expect block sub "sh -c 'git checkout main'"
+expect block sub 'eval "git reset --hard"'
+expect block sub '(git checkout main)'
+expect block sub '{ git stash; }'
+expect block sub 'if true; then git reset --hard; fi'
+expect block sub 'for b in main; do git checkout "$b"; done'
+expect block sub 'GIT_DIR=.git git reset --hard'
+expect block sub 'env -i git reset --hard'
+expect block sub 'nohup env git reset --hard'
+expect block sub 'xargs git reset --hard < /dev/null'
+expect block sub 'git -C .worktrees/x reset --hard'
+expect block sub "$(printf 'git status\ngit reset --hard')"
+echo
+
+echo "Hook: staging and config loopholes stay closed"
+expect block sub 'git add -f .env'
+expect block sub 'git add --force secrets.txt'
+expect block sub 'git add ..'
+expect block sub 'git -c core.hooksPath=/dev/null commit -m "x"'
+expect block sub 'git branch new-branch'
+expect block sub 'git branch -m old new'
+expect block sub 'git worktree remove .worktrees/x'
+expect block sub 'git stash pop'
+expect block sub 'git remote add other https://example.com/x.git'
+expect block sub 'git reflog expire --all'
+echo
+
+echo "Hook: read-only forms that Superpowers uses stay allowed"
+expect allow sub 'git -C .worktrees/x status'
+expect allow sub 'git -C .worktrees/x commit -m "feat: x"'
+expect allow sub 'cd .worktrees/x && git status'
+expect allow sub 'git --no-pager log -3'
+expect allow sub 'git -c color.ui=never log'
+expect allow sub 'git branch'
+expect allow sub 'git branch --show-current'
+expect allow sub 'git branch -a --contains HEAD'
+expect allow sub 'git merge-base HEAD main'
+expect allow sub 'git merge-base --is-ancestor HEAD main'
+expect allow sub 'git check-ignore -q .worktrees'
+expect allow sub 'git worktree list --porcelain'
+expect allow sub 'git stash list'
+expect allow sub 'git remote -v'
+expect allow sub 'git remote get-url origin'
+expect allow sub 'git reflog -5'
+expect allow sub 'git commit -s -m "feat: signed"'
+expect allow sub 'git commit -m "-n is not a flag inside a message"'
+expect allow sub 'echo "$(git rev-parse HEAD)"'
+expect allow sub 'bash scripts/run-tests.sh'
+expect allow sub "$(printf 'git add a.ts\ngit commit -m "feat: a"')"
+echo
+
+echo "Hook: a subagent command it cannot read is blocked, not allowed"
+raw_expect() {
+  # $1 = allow|block. $2 = label. $3 = raw payload text.
+  printf '%s' "$3" | "$HOOK" >/dev/null 2>&1
+  code=$?
+  want_code=0; [ "$1" = block ] && want_code=2
+  [ "$code" -eq "$want_code" ] && ok "$1: $2" || bad "$1: $2 [exit $code, wanted $want_code]"
+}
+raw_expect block "truncated subagent JSON that mentions git" '{"agent_id":"a1","tool_input":{"command":"git reset --hard'
+raw_expect allow "truncated subagent JSON with no git in it" '{"agent_id":"a1","tool_input":{"command":"npm te'
+raw_expect allow "a main session started with --agent is not a subagent" \
+  '{"agent_type":"implementer","tool_input":{"command":"git push origin main"}}'
 echo
 
 echo "Hook: non-git and the main session pass through"
@@ -252,6 +333,22 @@ PY
     ok "check-claude-md.sh fails when a required deny rule is missing"
   fi
   cp "$tmp/settings.saved" "$target/.claude/settings.json"
+
+  # A personal skill with the same name shadows the project copy, because
+  # Claude Code ranks personal skills above project skills. The check warns.
+  fake_home="$tmp/home"
+  mkdir -p "$fake_home/.claude/skills/ste-writing"
+  echo "an older personal copy" > "$fake_home/.claude/skills/ste-writing/SKILL.md"
+  shadow_out=$(HOME="$fake_home" "$target/.claude/scripts/check-claude-md.sh" "$target" 2>&1)
+  case "$shadow_out" in
+    *warn*ste-writing*shadows*) ok "check-claude-md.sh warns when a personal skill shadows a project skill" ;;
+    *) bad "check-claude-md.sh did not warn about a shadowing personal skill" ;;
+  esac
+  cp "$target/.claude/skills/ste-writing/SKILL.md" "$fake_home/.claude/skills/ste-writing/SKILL.md"
+  case "$(HOME="$fake_home" "$target/.claude/scripts/check-claude-md.sh" "$target" 2>&1)" in
+    *shadows*) bad "check-claude-md.sh warned about an identical personal skill" ;;
+    *) ok "check-claude-md.sh accepts an identical personal skill" ;;
+  esac
   echo
 
   # --- An existing project --------------------------------------------------
@@ -259,7 +356,7 @@ PY
   existing="$tmp/existing"
   mkdir -p "$existing/.claude"
   git -C "$existing" init -q -b main
-  printf '{\n  "permissions": {"allow": ["Bash(npm test)"], "deny": ["Bash(make deploy:*)"]},\n  "model": "sonnet"\n}\n' \
+  printf '{\n  "permissions": {"allow": ["Bash(npm test)"], "deny": ["Bash(make deploy:*)"]},\n  "env": {"FOO": "1"},\n  "model": "sonnet"\n}\n' \
     > "$existing/.claude/settings.json"
   echo "# Existing manual" > "$existing/CLAUDE.md"
   git -C "$existing" add -A
@@ -283,6 +380,8 @@ checks = [
     "block-subagent-git.sh" in hooks,
     "session-start-git-context.sh" in hooks,
     d.get("model") == "sonnet",
+    d.get("env", {}).get("FOO") == "1",
+    d.get("env", {}).get("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH") == "1",
 ]
 print("yes" if all(checks) else "no")
 PY
@@ -489,7 +588,35 @@ fi
 rm -rf "$land_tmp"
 echo
 
-# --- 7. The two manual variants diverge in section 4 only -------------------
+# --- 7. The review package ---------------------------------------------------
+# The reviewer agent holds no shell, so it cannot run "git diff" itself. The
+# orchestrator writes the diff to a file and hands the reviewer the path.
+PACKAGE="$ROOT/scripts/review-package.sh"
+echo "Review package"
+pkg_tmp=$(mktemp -d)
+git -C "$pkg_tmp" init -q -b main
+echo one > "$pkg_tmp/a.txt"; git -C "$pkg_tmp" add a.txt; git -C "$pkg_tmp" commit -qm "first commit"
+pkg_base=$(git -C "$pkg_tmp" rev-parse HEAD)
+echo two > "$pkg_tmp/a.txt"; git -C "$pkg_tmp" add a.txt; git -C "$pkg_tmp" commit -qm "second commit"
+pkg_path=$(cd "$pkg_tmp" && "$PACKAGE" "$pkg_base" HEAD 2>/dev/null)
+if [ -f "$pkg_path" ] && grep -q "second commit" "$pkg_path" && grep -q '^+two' "$pkg_path" \
+   && ! grep -q "first commit" "$pkg_path"; then
+  ok "review-package writes the commit list and the diff for exactly the range"
+else
+  bad "review-package did not write a correct package [path: $pkg_path]"
+fi
+[ -z "$(git -C "$pkg_tmp" status --porcelain)" ] \
+  && ok "review-package leaves git status clean, even without a .gitignore entry" \
+  || bad "review-package left the package visible to git status"
+if ! (cd "$pkg_tmp" && "$PACKAGE" no-such-ref HEAD >/dev/null 2>&1); then
+  ok "review-package refuses an unknown revision"
+else
+  bad "review-package accepted an unknown revision"
+fi
+rm -rf "$pkg_tmp"
+echo
+
+# --- 8. The two manual variants diverge in section 4 only -------------------
 # README.md and both usage blocks promise this. A divergence anywhere else means
 # a fix landed in one variant and not the other.
 if [ -f "$ROOT/CLAUDE-template.md" ] && [ -f "$ROOT/CLAUDE-light.md" ]; then
