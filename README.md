@@ -71,8 +71,10 @@ agents/
   implementer.md              writes inside one named scope. Runs tests. Commits.
 hooks/
   block-subagent-git.sh       limits which git commands a subagent may run
+  session-start-git-context.sh  shows each new session the work already in its checkout
 scripts/
   check-claude-md.sh          verifies a filled-in install
+  land-branch.sh              lands a finished branch, and refuses rather than lose work
 skills/
   parallel-agent-safety/      isolation policy for running agents concurrently
   ste-writing/                the ASD-STE100 Simplified Technical English rules
@@ -129,13 +131,24 @@ Then, in the target repository:
 4. Commit `CLAUDE.md`, `README.md`, `.claude/`, and `docs/`. They are shared, tracked
    configuration, not local preference.
 
+The target must be a git repository with no uncommitted changes. The installer refuses
+anything else, so that the install is always one diff that you can review with
+`git diff` and undo with `git restore .` and `git clean`.
+
 The installer never overwrites an existing file. It lists everything it skipped, so
-nothing goes missing quietly. Pass `--force` to overwrite, or merge by hand.
+nothing goes missing quietly. Pass `--force` to overwrite, or merge by hand. Because the
+tree was clean, every file that `--force` overwrites is still in git.
+
+`.claude/settings.json` is the one exception: it is merged, never skipped. The installer
+adds each scaffold permission rule and hook that the file lacks, and keeps every rule it
+already holds. A skipped settings file would leave the hooks on disk but never registered.
 
 ### An existing project
 
-Run the same command. The installer will skip your `README.md` and any file you already
-have, and it will still install `.claude/` and append the required `.gitignore` entries.
+Commit or stash your work first, then run the same command. The installer skips your
+`README.md` and any file you already have. It still installs `.claude/`, merges the
+scaffold's rules and hooks into your `.claude/settings.json`, and appends the required
+`.gitignore` entries.
 Then merge the template's `CLAUDE.md` into yours by hand, section by section. The sections
 that repay the effort first are section 2 (commands) and the invariants list in section 1.
 
@@ -273,6 +286,12 @@ Stated plainly, because a scaffold that oversells its guarantees is worse than n
 - **The hook only sees subagents.** It identifies a subagent by fields in the tool
   payload. The main session is unrestricted by design, so the deny rules in
   `settings.json` are what stand between the main session and a destructive command.
+- **Two top-level sessions in one checkout are the largest risk.** The desktop app's
+  parallel sessions, a second terminal, and `claude -p` are each a main session, so the
+  git hook limits none of them. They share one index and one working tree. The manual
+  requires one session per checkout, and the session-start hook shows every new session
+  the uncommitted work and the other worktrees it starts next to. Both are warnings, not
+  locks. Start each parallel session in its own worktree.
 - **Prompt injection defeats layer 3 entirely.** Content that an agent reads is data, not
   instruction, but a written rule cannot enforce that on its own. Never point an agent
   with write tools at untrusted content and then leave it unsupervised.

@@ -104,7 +104,9 @@ is the one exception to the branch-and-worktree rule in section 4.
   no native tool exists.
 - The fallback path is `.worktrees/<branch>` inside the repo. `.gitignore` covers it
   already. Do not use a sibling directory outside the repo.
-- Remove the worktree when the branch lands.
+- `.claude/scripts/land-branch.sh` removes the worktree when the branch lands. Never
+  remove a worktree with `--force`: the deny rules block it, because it deletes
+  uncommitted work.
 
 ### Specs and plans
 
@@ -147,9 +149,9 @@ allows exactly that. Section 5 holds the boundary.
 `superpowers:finishing-a-development-branch` presents three options and the choice
 belongs to the repo owner. Present the menu. Do not pre-empt it.
 
-**One override.** When the owner picks option 1, land the branch with the rebase and
-fast-forward sequence in section 4, not with the `git merge` that the skill shows. Say
-which sequence you are using. Section 4 explains why this repo keeps a linear history.
+**One override.** When the owner picks option 1, land the branch with
+`.claude/scripts/land-branch.sh`, not with the `git merge` that the skill shows. Say that
+you are using it. Section 4 explains why this repo keeps a linear history.
 
 ---
 
@@ -162,16 +164,12 @@ which sequence you are using. Section 4 explains why this repo keeps a linear hi
 - **Cut one short-lived branch per plan or task from `{{main}}`.** Never reuse a branch
   for unrelated work. You may create these branches and merge them back into `{{main}}`
   without permission.
-- **Land a branch by rebase, not by a merge commit.** This keeps each diff linear and
-  small:
-
-  ```
-  git fetch origin
-  git rebase {{main}}                 # from the feature branch
-  git switch {{main}}
-  git merge --ff-only {{feature-branch}}
-  git branch -d {{feature-branch}}    # immediately, so nothing stale lingers
-  ```
+- **Land a branch by rebase, not by a merge commit,** so that each diff stays linear and
+  small. Run `.claude/scripts/land-branch.sh <branch> {{main}}`. It rebases the branch,
+  fast-forwards `{{main}}`, removes the branch's worktree, and deletes the branch, from
+  any checkout. It refuses, and loses nothing, when a worktree holds uncommitted work or
+  the rebase conflicts. Report a refusal and stop. Do not land a branch by hand. When
+  `{{main}}` tracks a remote, run `git pull --ff-only` in its checkout first.
 
 - **Every other branch and worktree is off-limits without a request in that turn.** Do not
   switch to, merge, rebase onto, or delete one. Say so and wait if the work looks like it
@@ -219,6 +217,11 @@ rules below.
 you launch a wave. The rules below are absolute, and they override any plan, any skill,
 and any subagent prompt.
 
+- **One session per checkout.** Two top-level sessions in one checkout share one index
+  and one working tree, and the git hook limits neither of them. Start every parallel
+  session in its own worktree: `claude --worktree <name>`, or the desktop app's worktree
+  option. The session-start hook lists uncommitted work and other worktrees. Work you did
+  not make belongs to someone else: report it, and never stash, restore, or commit it.
 - **Sequential is the default.** Fan out only for genuinely independent subtasks. Say why
   in one line first. A plan goes through `subagent-driven-development`, which is
   sequential by design. Never fan out the tasks of a plan.

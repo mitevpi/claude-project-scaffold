@@ -88,6 +88,8 @@ fi
 for path in \
   ".claude/settings.json" \
   ".claude/hooks/block-subagent-git.sh" \
+  ".claude/hooks/session-start-git-context.sh" \
+  ".claude/scripts/land-branch.sh" \
   ".claude/agents/researcher.md" \
   ".claude/agents/reviewer.md" \
   ".claude/agents/implementer.md" \
@@ -101,28 +103,88 @@ do
   fi
 done
 
-# --- 5. settings.json is valid JSON -----------------------------------------
+# --- 5. settings.json parses, registers the hooks, and holds the deny rules --
+# A hook on disk that settings.json does not register never runs. A check that
+# only looks for the file gives false confidence, so check the wiring too.
+# The deny rules below are the ones that stand between the main session and
+# lost work. The main session is not limited by the git hook, so these rules
+# are its only mechanical control.
 if [ -f "$ROOT/.claude/settings.json" ]; then
   if command -v python3 >/dev/null 2>&1; then
-    if python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$ROOT/.claude/settings.json" 2>/dev/null; then
-      ok "settings.json parses as JSON"
-    else
-      bad "settings.json is not valid JSON"
-    fi
+    settings_report=$(python3 - "$ROOT/.claude/settings.json" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except ValueError:
+    print("bad settings.json is not valid JSON")
+    sys.exit(0)
+print("ok settings.json parses as JSON")
+
+def registered(event, script):
+    for group in d.get("hooks", {}).get(event, []):
+        for h in group.get("hooks", []):
+            if script in h.get("command", ""):
+                return group.get("matcher", "")
+    return None
+
+m = registered("PreToolUse", "block-subagent-git.sh")
+if m is None:
+    print("bad settings.json does not register block-subagent-git.sh under PreToolUse. The hook never runs.")
+elif m not in ("Bash", "*", ""):
+    print("bad block-subagent-git.sh is registered with matcher %r. It must match Bash." % m)
+else:
+    print("ok settings.json registers block-subagent-git.sh for Bash")
+
+if registered("SessionStart", "session-start-git-context.sh") is None:
+    print("bad settings.json does not register session-start-git-context.sh under SessionStart")
+else:
+    print("ok settings.json registers session-start-git-context.sh")
+
+required = [
+    "Bash(git reset --hard:*)",
+    "Bash(git clean:*)",
+    "Bash(git push --force:*)",
+    "Bash(git checkout -f:*)",
+    "Bash(git switch --discard-changes:*)",
+    "Bash(git branch -D:*)",
+    "Bash(git worktree remove --force:*)",
+    "Bash(git reflog expire:*)",
+    "Bash(git stash clear:*)",
+    "Bash(rm -rf:*)",
+]
+deny = d.get("permissions", {}).get("deny", [])
+missing = [r for r in required if r not in deny]
+if missing:
+    print("bad settings.json lacks %d required deny rule(s): %s" % (len(missing), ", ".join(missing)))
+else:
+    print("ok settings.json holds the required deny rules")
+PY
+)
+    while IFS= read -r line; do
+      case "$line" in
+        ok\ *)  ok "${line#ok }" ;;
+        bad\ *) bad "${line#bad }" ;;
+      esac
+    done <<EOF
+$settings_report
+EOF
   else
-    caution "python3 not found, skipped the JSON check"
+    caution "python3 not found, skipped the settings.json checks"
   fi
 fi
 
-# --- 6. The hook is executable ----------------------------------------------
+# --- 6. The hooks and scripts are executable ---------------------------------
+# A hook that cannot execute exits 126, and Claude Code treats that as a
+# non-blocking error. The command runs anyway, so the hook fails open silently.
 hook="$ROOT/.claude/hooks/block-subagent-git.sh"
-if [ -f "$hook" ]; then
-  if [ -x "$hook" ]; then
-    ok "the git hook is executable"
+for f in "$hook" "$ROOT/.claude/hooks/session-start-git-context.sh" "$ROOT/.claude/scripts/land-branch.sh"; do
+  [ -f "$f" ] || continue
+  if [ -x "$f" ]; then
+    ok "${f#"$ROOT"/} is executable"
   else
-    bad "the git hook is not executable. Run: chmod +x $hook"
+    bad "${f#"$ROOT"/} is not executable. Run: chmod +x $f"
   fi
-fi
+done
 
 # --- 7. The hook actually enforces its policy -------------------------------
 # A hook that is present but broken gives false confidence. Test it directly.

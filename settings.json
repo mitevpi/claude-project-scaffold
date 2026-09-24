@@ -6,19 +6,40 @@
       "Bash(git clean:*)",
       "Bash(git checkout .)",
       "Bash(git checkout -- .)",
+      "Bash(git checkout -f:*)",
+      "Bash(git checkout --force:*)",
+      "Bash(git switch -f:*)",
+      "Bash(git switch --force:*)",
+      "Bash(git switch --discard-changes:*)",
       "Bash(git restore .)",
       "Bash(git restore --staged .)",
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
       "Bash(git branch -D:*)",
+      "Bash(git branch -f:*)",
+      "Bash(git branch --force:*)",
+      "Bash(git branch -d -f:*)",
+      "Bash(git branch --delete --force:*)",
+      "Bash(git worktree remove --force:*)",
+      "Bash(git worktree remove -f:*)",
+      "Bash(git worktree remove * --force)",
+      "Bash(git worktree remove * -f)",
       "Bash(git filter-branch:*)",
       "Bash(git update-ref -d:*)",
       "Bash(git reflog delete:*)",
+      "Bash(git reflog expire:*)",
+      "Bash(git gc --prune:*)",
+      "Bash(git prune:*)",
       "Bash(git stash drop:*)",
       "Bash(git stash clear:*)",
       "Bash(rm -rf:*)",
       "Bash(rm -fr:*)",
+      "Bash(rm -Rf:*)",
+      "Bash(rm -fR:*)",
       "Bash(rm -r -f:*)",
+      "Bash(rm -f -r:*)",
+      "Bash(rm --recursive --force:*)",
+      "Bash(rm --force --recursive:*)",
       "Read(.env)",
       "Read(.env.*)",
       "Read(**/*.pem)",
@@ -29,8 +50,15 @@
       "Bash(git push:*)",
       "Bash(git merge:*)",
       "Bash(git rebase:*)",
+      "Bash(git checkout:*)",
+      "Bash(git restore:*)",
+      "Bash(git stash:*)",
       "Bash(git worktree remove:*)",
       "Bash(git worktree prune:*)",
+      "Bash(.claude/scripts/land-branch.sh:*)",
+      "Bash(rm -r:*)",
+      "Bash(rm -R:*)",
+      "Bash(rm --recursive:*)",
       "Bash(gh pr create:*)",
       "Bash(gh pr merge:*)",
       "Bash(npm install:*)",
@@ -55,6 +83,16 @@
           {
             "type": "command",
             "command": "sh -c 'd=\"${CLAUDE_PROJECT_DIR:-$PWD}\"; exec \"$d/.claude/hooks/block-subagent-git.sh\"'"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'd=\"${CLAUDE_PROJECT_DIR:-$PWD}\"; exec \"$d/.claude/hooks/session-start-git-context.sh\"'"
           }
         ]
       }

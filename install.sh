@@ -6,16 +6,27 @@
 #   ./install.sh --light <target-repo>    install the light CLAUDE.md variant
 #   ./install.sh --force <target-repo>    overwrite files that already exist
 #
+# The target must be a git repository with no uncommitted changes. That makes
+# the install one reviewable diff: "git diff" shows it, and "git restore ."
+# plus "git clean" undo it. It is also what makes --force safe, because every
+# file it overwrites is still in git.
+#
 # What it copies:
 #   CLAUDE-template.md   -> <target>/CLAUDE.md
 #   README-template.md   -> <target>/README.md
-#   settings.json        -> <target>/.claude/settings.json
+#   settings.json        -> <target>/.claude/settings.json, merged into an
+#                           existing file rather than skipped (see below)
 #   agents/  hooks/  scripts/  skills/  -> <target>/.claude/
 #   docs/                -> <target>/docs/
 #   and it appends the Claude and Superpowers block to <target>/.gitignore
 #
 # It never overwrites an existing file unless you pass --force. It reports
 # every file it skipped, so nothing goes missing quietly.
+#
+# settings.json is the exception. It is never skipped and never overwritten.
+# The scaffold's permission rules and hooks are merged into an existing file,
+# and every rule already there is kept. A skipped settings.json would leave the
+# hooks on disk but never registered, which is worse than no hooks at all.
 
 set -euo pipefail
 
@@ -66,6 +77,23 @@ if [ "$TARGET" = "$SCAFFOLD" ]; then
   exit 2
 fi
 
+if ! git -C "$TARGET" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "$TARGET is not a git repository. Run 'git init' there first." >&2
+  exit 2
+fi
+
+if [ -n "$(git -C "$TARGET" status --porcelain)" ]; then
+  echo "$TARGET has uncommitted changes. Commit or stash them first, so that" >&2
+  echo "the install is one diff you can review and undo." >&2
+  git -C "$TARGET" status --short >&2
+  exit 2
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required to merge .claude/settings.json." >&2
+  exit 2
+fi
+
 copied=0
 skipped=0
 
@@ -96,6 +124,28 @@ copy_tree() {
   done < <(find "$src_dir" -type f -print0)
 }
 
+# merge_settings SOURCE DEST
+# Adds every scaffold permission rule and hook that DEST lacks. Keeps
+# everything DEST already has, in its order. Writes nothing when nothing is
+# missing, so a second install leaves the file byte-identical.
+merge_settings() {
+  src="$1"
+  dest="$2"
+  if [ ! -e "$dest" ]; then
+    copy_file "$src" "$dest"
+    return 0
+  fi
+  if ! result=$(python3 "$SCAFFOLD/dev/merge-settings.py" "$src" "$dest"); then
+    echo "  FAIL  .claude/settings.json could not be merged: $result" >&2
+    exit 1
+  fi
+  if [ "$result" = "0" ]; then
+    echo "  keep  .claude/settings.json (it already holds every scaffold rule and hook)"
+  else
+    echo "  merge .claude/settings.json (added $result rule(s), hook(s), or key(s))"
+  fi
+}
+
 echo "Installing the $variant variant into $TARGET"
 echo
 
@@ -108,7 +158,7 @@ esac
 
 copy_file "$manual" "$TARGET/CLAUDE.md"
 copy_file "$SCAFFOLD/README-template.md" "$TARGET/README.md"
-copy_file "$SCAFFOLD/settings.json" "$TARGET/.claude/settings.json"
+merge_settings "$SCAFFOLD/settings.json" "$TARGET/.claude/settings.json"
 
 for dir in agents hooks scripts skills; do
   copy_tree "$SCAFFOLD/$dir" "$TARGET/.claude/$dir"
@@ -164,6 +214,7 @@ Next:
      TEMPLATE USAGE comment block from each. An unfilled placeholder is worse
      than a missing section: it teaches the agent to guess.
   2. Run the check:  .claude/scripts/check-claude-md.sh
+     It also confirms that settings.json registers both hooks.
   3. Commit the result. CLAUDE.md and .claude/ are shared, tracked files.
 NEXT
 

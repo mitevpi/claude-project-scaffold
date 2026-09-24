@@ -133,13 +133,20 @@ For each branch:
 
 1. Read the full diff. You own this review. Do not delegate it to the agent that wrote
    the code.
-2. Rebase the branch onto the current base branch.
-3. Run the full test suite and the lint and typecheck commands.
-4. Fast-forward the base branch, then delete the feature branch.
-5. Remove the worktree.
+2. Run the full test suite and the lint and typecheck commands on the branch, rebased
+   onto the current base branch.
+3. Land it with `.claude/scripts/land-branch.sh <branch> <base>`. The script rebases,
+   fast-forwards the base, removes the worktree, and then deletes the branch. That
+   order matters: git refuses to delete a branch that a worktree still has checked
+   out. Where the repository has no such script, follow the same order by hand.
+4. Run the suite again on the base branch.
 
-Only then start the next branch. A failure at step 3 stops the wave. Fix it before you
-integrate anything else.
+Only then start the next branch. A failure at step 2 or 4 stops the wave. Fix it before
+you integrate anything else.
+
+When the script refuses, it has changed nothing that loses work. Report its message. Never
+remove a worktree with `--force`: git suggests it when a worktree holds uncommitted work,
+and that work is exactly what `--force` deletes.
 
 The wave is finished when the combined result passes on the base branch. It is not
 finished when the agents return.
