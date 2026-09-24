@@ -92,14 +92,28 @@ echo
 
 # --- 1. Shell scripts parse -------------------------------------------------
 echo "Shell syntax"
-for script in "$ROOT"/hooks/*.sh "$ROOT"/scripts/*.sh "$ROOT"/install.sh; do
+# Each script is parsed by the shell its shebang names. A #!/bin/sh hook runs
+# under dash on Ubuntu, so where dash exists it parses the hook too: a bash
+# construct that bash would accept must fail here, not fail open in a project.
+for script in "$ROOT"/hooks/*.sh "$ROOT"/scripts/*.sh "$ROOT"/install.sh "$ROOT"/self-test.sh; do
   [ -f "$script" ] || continue
   name="${script#"$ROOT"/}"
-  if sh -n "$script" 2>/dev/null || bash -n "$script" 2>/dev/null; then
-    ok "$name parses"
-  else
-    bad "$name has a syntax error"
-  fi
+  case "$(head -1 "$script")" in
+    '#!/bin/sh'*)
+      shells="sh"
+      command -v dash >/dev/null 2>&1 && shells="sh dash" ;;
+    *bash*) shells="bash" ;;
+    *) bad "$name has no sh or bash shebang"; continue ;;
+  esac
+  failed=""
+  for shell in $shells; do
+    "$shell" -n "$script" 2>/dev/null || failed="$failed $shell"
+  done
+  [ -z "$failed" ] && ok "$name parses under $shells" || bad "$name has a syntax error under$failed"
+done
+for py in "$ROOT"/dev/*.py; do
+  python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$py" 2>/dev/null \
+    && ok "${py#"$ROOT"/} parses" || bad "${py#"$ROOT"/} has a syntax error"
 done
 echo
 
