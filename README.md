@@ -97,8 +97,10 @@ which layer is doing the work.
 
 1. **Mechanical.** `settings.json` deny rules and settings, and the two hooks. These
    run outside the model. `git reset --hard`, forced worktree removal, and `rm -rf` are
-   denied. `git push` and `npm install` ask first. A subagent cannot push, branch, merge,
-   or rebase at all, and it cannot spawn a subagent of its own.
+   denied, and the git hook blocks the destructive git commands again in the forms a deny
+   rule cannot match, such as `git -C <path> reset --hard`. `git push` and `npm install`
+   ask first. A subagent cannot push, branch, merge, or rebase at all, and it cannot
+   spawn a subagent of its own.
 2. **Configured.** The agent definitions in `agents/`. A `researcher` and a `reviewer`
    hold no write tools and no shell, so they cannot write a file even when told to. This
    is a property of the configuration, not of the agent's cooperation.
@@ -283,8 +285,11 @@ subshell, a `{ }` group, an `if` or `for` body, `bash -c`, `sh -c`, `eval`, `fin
 or a heredoc fed to a shell. A command whose name is built at run time, such as `$G push`,
 is blocked when the command mentions git. The self-test holds a case for each form.
 
-The main session is never limited by the hook. It holds the branch operations, the merges,
-and the pushes, which is where the owner's review sits.
+The main session keeps the branch operations, the merges, and the pushes, which is where
+the owner's review sits. The hook blocks it only from the commands that destroy work: the
+ones `settings.json` denies, such as `reset --hard`, `clean`, a force push, and
+`branch -D`. A deny rule matches the command as written, so `git -C <path> reset --hard`
+or `bash -c "git clean -fd"` passes it. The hook reads those forms too.
 
 ### Skill naming
 
@@ -351,12 +356,13 @@ Stated plainly, because a scaffold that oversells its guarantees is worse than n
   that blocked on its own errors everywhere would stall every session. It is still a
   guard against a slip, not a wall: a script file or an interpreter such as
   `python3 -c` that runs git is invisible to it.
-- **The hook only sees subagents.** It identifies a subagent by fields in the tool
-  payload. The main session is unrestricted by design, so the deny rules in
-  `settings.json` are what stand between the main session and a destructive command.
+- **The hook limits the main session only a little.** It identifies a subagent by
+  fields in the tool payload. For the main session it blocks only the destructive
+  commands that `settings.json` also denies. Every other git command in the main
+  session rests on the ask rules and on your review.
 - **Two top-level sessions in one checkout are the largest risk.** The desktop app's
   parallel sessions, a second terminal, and `claude -p` are each a main session, so the
-  git hook limits none of them. They share one index and one working tree. The manual
+  git hook lets each of them commit, stash, and switch branches. They share one index and one working tree. The manual
   requires one session per checkout, and the session-start hook shows every new session
   the uncommitted work and the other worktrees it starts next to. Both are warnings, not
   locks. Start each parallel session in its own worktree.

@@ -198,7 +198,7 @@ done
 
 # --- 7. The hook actually enforces its policy -------------------------------
 # A hook that is present but broken gives false confidence. Test it directly.
-# The full matrix lives in the scaffold's own self-test.sh; these are the six
+# The full matrix lives in the scaffold's own self-test.sh; these are the few
 # cases that prove the policy is the intended one.
 if [ -x "$hook" ] && command -v python3 >/dev/null 2>&1; then
   hook_case() {
@@ -228,7 +228,8 @@ PY
   hook_case "blocks blanket staging"                   2 sub 'git add -A'
   hook_case "blocks a hook bypass"                     2 sub 'git commit --no-verify -m "x"'
   hook_case "blocks a subagent push"                   2 sub 'git push origin main'
-  hook_case "never limits the main session"            0 main 'git reset --hard HEAD~1'
+  hook_case "lets the main session reshape the repo"   0 main 'git rebase main'
+  hook_case "blocks a destructive main-session command" 2 main 'git -C .worktrees/x reset --hard'
 
   # Run the hook exactly as settings.json registers it. A wrong path in the
   # command exits 127, which Claude Code treats as a non-blocking error: the
