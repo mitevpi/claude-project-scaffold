@@ -15,7 +15,8 @@
 #   1. Read history and state: status, diff, log, show, merge-base, the
 #      listing forms of branch, worktree, stash, remote, and reflog, and the
 #      rest of READ_ONLY below.
-#   2. Stage explicit paths with "git add <path>".
+#   2. Stage explicit paths with "git add <path>", and rename or delete
+#      one with "git mv" or "git rm", but never with -f.
 #   3. Commit its own work with "git commit".
 #
 # Reason 3 matters: superpowers:subagent-driven-development requires every
@@ -566,6 +567,37 @@ def guard_add(rest):
         raise Blocked('Name the paths to stage. "git add" without an explicit path is not allowed.')
 
 
+def explicit_paths(cmd, rest, danger_long, danger_short, why):
+    """Return the paths in rest. Block a dangerous option, in any spelling,
+    and a pathspec that reaches past the files it names."""
+    paths, only_paths = [], False
+    for a in rest:
+        if only_paths or not a.startswith("-"):
+            if blanket_path(a):
+                raise Blocked("git %s %s reaches the whole tree. Name each path." % (cmd, a))
+            paths.append(a)
+        elif a == "--":
+            only_paths = True
+        elif (a.startswith("--") and abbreviates(a, danger_long)) or \
+                (not a.startswith("--") and any(ch in danger_short for ch in a[1:])):
+            raise Blocked("git %s %s %s" % (cmd, a, why))
+    return paths
+
+
+def guard_rm(rest):
+    # -f removes a file even when it holds uncommitted changes.
+    if not explicit_paths("rm", rest, ("--force", "--pathspec-from-file"), "f",
+                          "can discard uncommitted work. Commit or restore it first."):
+        raise Blocked('Name the paths to remove. "git rm" without an explicit path is not allowed.')
+
+
+def guard_mv(rest):
+    # -f overwrites a destination that already exists.
+    if len(explicit_paths("mv", rest, ("--force",), "f",
+                          "overwrites the destination. Move to a free path.")) < 2:
+        raise Blocked('Name a source and a destination: "git mv <from> <to>".')
+
+
 COMMIT_DANGER_LONG = ("--all", "--no-verify", "--amend", "--include",
                       "--interactive", "--patch", "--pathspec-from-file")
 COMMIT_VALUE_LONG = ("--message", "--file", "--reuse-message", "--reedit-message",
@@ -648,6 +680,8 @@ GUARDS = {
     "config": guard_config,
     "add": guard_add,
     "commit": guard_commit,
+    "rm": guard_rm,
+    "mv": guard_mv,
     "branch": guard_branch,
     "worktree": guard_listing_only("worktree", {"list"}),
     "stash": guard_listing_only("stash", {"list", "show"}),

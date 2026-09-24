@@ -24,7 +24,7 @@ Your brief names the files or directories you may change. That list is complete.
 You may do exactly three things with git.
 
 1. Read history and state: `status`, `diff`, `log`, `show`, `rev-parse`, and the other read commands.
-2. Stage the explicit paths you changed: `git add <path>`. Never `git add -A`, `--all`, `-u`, or `.`. Blanket staging collects scratch files, local config, and secrets.
+2. Stage the explicit paths you changed: `git add <path>`, or `git mv` and `git rm` for a rename or a delete inside your scope. Never `git add -A`, `--all`, `-u`, or `.`. Blanket staging collects scratch files, local config, and secrets.
 3. Commit your own finished work: `git commit -m "<message>"`. Commit only after its tests pass.
 
 Never bypass a hook. `--no-verify` and `-n` are blocked, and so are `-a` and `--amend`.
