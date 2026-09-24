@@ -265,19 +265,23 @@ it. For a subagent:
 | --- | --- |
 | `status`, `diff`, `log`, `show`, `rev-parse`, `merge-base`, `check-ignore`, and the other read commands | `push`, `checkout`, `switch`, `restore`, `merge`, `rebase`, `reset`, `cherry-pick`, `revert`, `clean`, `tag` |
 | `branch` (listing), `worktree list`, `stash list` and `show`, `remote -v` and `get-url`, `reflog` | creating, moving, or deleting a branch, worktree, stash, or remote; `reflog expire` |
-| `git add <explicit path>` | `git add -A`, `--all`, `-u`, `-f`, `.`, `..`, `:/`, `*` |
-| `git commit -m "..."` | `git commit` with `-a`, `-n`, `--no-verify`, or `--amend`; `git -c core.hooksPath=...` |
-| `git config --get`, `--list` | `git config <name> <value>` |
-| `git -C <path> ...`, `cd <path> && git ...` | |
+| `git add <explicit path>` | `git add -A`, `--all`, `-u`, `-f`, `-p`; a pathspec for the whole tree: `.`, `..`, `:/`, `:(top)`, a glob, `"$PWD"` |
+| `git commit -m "..."` | `git commit` with `-a`, `-n`, `--no-verify`, `--amend`, or a pathspec such as `.` |
+| `git config --get`, `--list` | `git config <name> <value>`; `core.hooksPath` through `-c`, `--config-env`, or `GIT_CONFIG_*`; `HUSKY=0` |
+| `git -C <path> ...`, `cd <path> && git ...` | `land-branch.sh`, which rebases and deletes a branch out of the hook's sight |
 
-The last three rows turn two written rules into mechanical ones. "Stage explicit paths"
-and "never bypass a hook" are now enforced rather than requested. The hook uses an
-allowlist, so a git subcommand it has never heard of is blocked, not permitted.
+The middle rows turn two written rules into mechanical ones: "stage explicit paths" and
+"never bypass a hook". git accepts any unique prefix of a long option, so the guards
+treat `--amen` as `--amend`, and they read a flag group such as `-fv` letter by letter.
+The hook uses an allowlist, so a git subcommand it has never heard of is blocked, not
+permitted.
 
 The hook reads the whole command, not only its first word. A git command is inspected
-wherever it sits: after a path such as `/usr/bin/git`, after `env`, `nohup`, `xargs`, or a
-variable assignment, and inside `$(...)`, backticks, a subshell, a `{ }` group, an `if` or
-`for` body, `bash -c`, `sh -c`, or `eval`. The self-test holds a case for each form.
+wherever it sits: after a path such as `/usr/bin/git`, after `env` (including `env -S`),
+`nohup`, `xargs`, `watch`, or a variable assignment, and inside `$(...)`, backticks, a
+subshell, a `{ }` group, an `if` or `for` body, `bash -c`, `sh -c`, `eval`, `find -exec`,
+or a heredoc fed to a shell. A command whose name is built at run time, such as `$G push`,
+is blocked when the command mentions git. The self-test holds a case for each form.
 
 The main session is never limited by the hook. It holds the branch operations, the merges,
 and the pushes, which is where the owner's review sits.
@@ -345,7 +349,8 @@ Stated plainly, because a scaffold that oversells its guarantees is worse than n
   it cannot read a subagent command that mentions git, or python3 is missing, it blocks.
   For the main session, and for a subagent command with no git in it, it allows. A hook
   that blocked on its own errors everywhere would stall every session. It is still a
-  guard against a slip, not a wall: a script file that runs git is invisible to it.
+  guard against a slip, not a wall: a script file or an interpreter such as
+  `python3 -c` that runs git is invisible to it.
 - **The hook only sees subagents.** It identifies a subagent by fields in the tool
   payload. The main session is unrestricted by design, so the deny rules in
   `settings.json` are what stand between the main session and a destructive command.
