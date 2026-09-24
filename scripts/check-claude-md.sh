@@ -346,9 +346,12 @@ done
 for doc in "$ROOT"/docs/*.md; do
   [ -f "$doc" ] || continue
   n=$(grep -cE "$placeholder_re" "$doc" || true)
-  if [ "$n" -gt 0 ] || grep -q 'TEMPLATE USAGE' "$doc"; then
-    caution "${doc#"$ROOT"/} still holds $n placeholder line(s) or its usage block. Fill it in, or delete it and its links."
+  left=""
+  [ "$n" -gt 0 ] && left="$n placeholder line(s)"
+  if grep -q 'TEMPLATE USAGE' "$doc"; then
+    left="${left:+$left and }its usage block"
   fi
+  [ -n "$left" ] && caution "${doc#"$ROOT"/} still holds $left. Fill it in, or delete it and its links."
 done
 for dir in "docs/superpowers/specs" "docs/superpowers/plans"; do
   [ -d "$ROOT/$dir" ] && ok "$dir/" || caution "$dir/ is missing. Superpowers writes there."
