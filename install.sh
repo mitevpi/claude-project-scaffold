@@ -14,8 +14,12 @@
 # --update reads that record. For each file under .claude/agents, hooks,
 # scripts, and skills, it adds a file that is new, refreshes a file that the
 # project never changed, and keeps a file that the project customised, and
-# names it. It never touches CLAUDE.md or README.md. It tells you when their
-# templates changed upstream, and how to see the change.
+# names it. A file the project deleted stays deleted. A file that upstream
+# deleted is removed, unless the project customised it. The settings merge
+# works the same way: it adds a rule only when it is new upstream, and it
+# drops a rule or hook command that upstream dropped. It never touches
+# CLAUDE.md or README.md. It tells you when their templates changed
+# upstream, and how to see the change.
 #
 # The target must be a git repository with no uncommitted changes. That makes
 # the install one reviewable diff: "git diff" shows it, and "git restore ."
@@ -157,6 +161,7 @@ fi
 copied=0
 skipped=0
 refreshed=0
+removed=0
 customised=""
 
 # copy_file SOURCE DEST
@@ -194,7 +199,12 @@ update_file() {
   dest="$2"
   rel="$3"
   if [ ! -e "$dest" ]; then
-    copy_file "$src" "$dest"
+    if [ -n "$old_commit" ] && git -C "$SCAFFOLD" cat-file -e "$old_commit:$rel" 2>/dev/null; then
+      # The installed commit had this file, so the project deleted it.
+      printf '  gone  %s (deleted in this project, so not restored)\n' "${dest#"$TARGET"/}"
+    else
+      copy_file "$src" "$dest"
+    fi
   elif cmp -s "$src" "$dest"; then
     return 0
   elif [ -n "$old_commit" ] && git -C "$SCAFFOLD" show "$old_commit:$rel" 2>/dev/null | cmp -s - "$dest"; then
@@ -207,10 +217,12 @@ update_file() {
   fi
 }
 
-# merge_settings SOURCE DEST
+# merge_settings SOURCE DEST [OLD]
 # Adds every scaffold permission rule and hook that DEST lacks. Keeps
-# everything DEST already has, in its order. Writes nothing when nothing is
-# missing, so a second install leaves the file byte-identical.
+# everything DEST already has, in its order. With OLD, the scaffold settings
+# of the installed commit, it skips what the project removed and drops what
+# upstream dropped. Writes nothing when nothing changes, so a second install
+# leaves the file byte-identical.
 merge_settings() {
   src="$1"
   dest="$2"
@@ -218,14 +230,16 @@ merge_settings() {
     copy_file "$src" "$dest"
     return 0
   fi
-  if ! result=$(python3 "$SRC/dev/merge-settings.py" "$src" "$dest"); then
+  if ! result=$(python3 "$SRC/dev/merge-settings.py" "$src" "$dest" ${3:+"$3"}); then
     echo "  FAIL  .claude/settings.json could not be merged: $result" >&2
     exit 1
   fi
-  if [ "$result" = "0" ]; then
+  n_added=${result% *}
+  n_removed=${result#* }
+  if [ "$result" = "0 0" ]; then
     echo "  keep  .claude/settings.json (it already holds every scaffold rule and hook)"
   else
-    echo "  merge .claude/settings.json (added $result rule(s), hook(s), or key(s))"
+    echo "  merge .claude/settings.json (added $n_added, removed $n_removed rule(s), hook(s), or key(s))"
   fi
 }
 
@@ -240,7 +254,12 @@ manual="$SRC/$manual_name"
 if [ "$update" -eq 1 ]; then
   echo "Updating the $variant install in $TARGET to scaffold commit ${new_commit:0:10}"
   echo
-  merge_settings "$SRC/settings.json" "$TARGET/.claude/settings.json"
+  old_settings=""
+  if [ -n "$old_commit" ]; then
+    old_settings="$SRC/.installed-settings.json"
+    git -C "$SCAFFOLD" show "$old_commit:settings.json" > "$old_settings" 2>/dev/null || : > "$old_settings"
+  fi
+  merge_settings "$SRC/settings.json" "$TARGET/.claude/settings.json" "$old_settings"
   for dir in agents hooks scripts skills; do
     [ -d "$SRC/$dir" ] || continue
     while IFS= read -r -d '' file; do
@@ -248,6 +267,24 @@ if [ "$update" -eq 1 ]; then
       update_file "$file" "$TARGET/.claude/$rel" "$rel"
     done < <(find "$SRC/$dir" -type f -print0)
   done
+  # A file that upstream deleted leaves the project too, unless the project
+  # customised it. --no-renames reports a rename as a delete and an add.
+  if [ -n "$old_commit" ]; then
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      dest="$TARGET/.claude/$rel"
+      [ -e "$dest" ] || continue
+      if git -C "$SCAFFOLD" show "$old_commit:$rel" 2>/dev/null | cmp -s - "$dest"; then
+        rm -f "$dest"
+        rmdir "$(dirname "$dest")" 2>/dev/null || true
+        printf '  remove %s (deleted upstream)\n' "${dest#"$TARGET"/}"
+        removed=$((removed + 1))
+      else
+        printf '  keep  %s (deleted upstream, but customised in this project)\n' "${dest#"$TARGET"/}"
+        customised="$customised ${dest#"$TARGET"/}"
+      fi
+    done < <(git -C "$SCAFFOLD" diff --no-renames --name-only --diff-filter=D "$old_commit" "$new_commit" -- agents hooks scripts skills)
+  fi
   # docs/ is project content once installed. Add only what is missing.
   copy_tree "$SRC/docs" "$TARGET/docs" >/dev/null
 else
@@ -325,7 +362,7 @@ done
 # --- Report ------------------------------------------------------------------
 echo
 if [ "$update" -eq 1 ]; then
-  echo "Added $copied file(s), refreshed $refreshed."
+  echo "Added $copied file(s), refreshed $refreshed, removed $removed."
   if [ -n "$customised" ]; then
     echo
     echo "Kept these customised files. Compare each one with the scaffold by hand:"

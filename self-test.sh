@@ -739,16 +739,27 @@ PY
   mkdir -p "$up"; git -C "$up" init -q -b main
   "$SNAP/install.sh" "$up" >/dev/null 2>&1
   echo "# customised by this project" >> "$up/.claude/agents/implementer.md"
+  echo "# customised by this project" >> "$up/.claude/agents/researcher.md"
+  # The project removes what it does not want, as the README invites.
+  rm -rf "$up/.claude/skills/ste-writing"
+  settings_edit "$up/.claude/settings.json" 'd["permissions"]["ask"].remove("Bash(docker:*)")'
   git -C "$up" add -A; git -C "$up" commit -qm "install and customise"
   manual_before=$(cat "$up/CLAUDE.md")
 
-  # The scaffold moves on: a hook fix, an agent change, a new file, and a
-  # manual change.
+  # The scaffold moves on: a hook fix, an agent change, a new file, a manual
+  # change, a new rule, a dropped rule, a changed hook command, and two
+  # deleted files, one of which the project customised.
   echo "# upstream hook fix" >> "$SNAP/hooks/block-subagent-git.sh"
   echo "# upstream agent change" >> "$SNAP/agents/implementer.md"
   mkdir -p "$SNAP/skills/new-skill"; echo "new" > "$SNAP/skills/new-skill/SKILL.md"
   echo "<!-- upstream manual change -->" >> "$SNAP/CLAUDE-template.md"
-  git -C "$SNAP" add hooks agents/implementer.md skills/new-skill CLAUDE-template.md
+  settings_edit "$SNAP/settings.json" '
+d["permissions"]["ask"].append("Bash(helm:*)")
+d["permissions"]["ask"].remove("Bash(kubectl:*)")
+h = d["hooks"]["SessionStart"][0]["hooks"][0]
+h["command"] = h["command"] + " # v2"'
+  git -C "$SNAP" rm -q scripts/review-package.sh agents/researcher.md
+  git -C "$SNAP" add hooks agents/implementer.md skills/new-skill CLAUDE-template.md settings.json
   git -C "$SNAP" commit -qm "upstream changes"
   snap_b=$(git -C "$SNAP" rev-parse HEAD)
 
@@ -777,6 +788,39 @@ PY
   grep -q "^commit $snap_b\$" "$up/.claude/scaffold-version" \
     && ok "--update records the new scaffold commit" \
     || bad "--update did not record the new scaffold commit"
+
+  # A choice the project made survives the update.
+  [ ! -e "$up/.claude/skills/ste-writing/SKILL.md" ] \
+    && ok "--update does not restore a file the project deleted" \
+    || bad "--update restored a file the project deleted"
+  case "$update_out" in
+    *ste-writing*) ok "--update names the file the project deleted" ;;
+    *) bad "--update did not report the file the project deleted" ;;
+  esac
+  up_settings() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$up/.claude/settings.json" "$1"; }
+  [ "$(up_settings '"Bash(docker:*)" in d["permissions"]["ask"]')" = "False" ] \
+    && ok "--update does not restore a rule the project removed" \
+    || bad "--update restored a rule the project removed"
+  [ "$(up_settings '"Bash(helm:*)" in d["permissions"]["ask"]')" = "True" ] \
+    && ok "--update adds a rule that is new upstream" \
+    || bad "--update did not add a new upstream rule"
+  [ "$(up_settings '"Bash(kubectl:*)" in d["permissions"]["ask"]')" = "False" ] \
+    && ok "--update drops a rule that upstream dropped" \
+    || bad "--update kept a rule that upstream dropped"
+  [ "$(up_settings '[h["command"].endswith(" # v2") for g in d["hooks"]["SessionStart"] for h in g["hooks"]]')" = "[True]" ] \
+    && ok "--update replaces a changed hook command instead of registering it twice" \
+    || bad "--update left the old hook command registered"
+  # A file that upstream deleted leaves the project, unless it was customised.
+  [ ! -e "$up/.claude/scripts/review-package.sh" ] \
+    && ok "--update removes a file that upstream deleted" \
+    || bad "--update kept a file that upstream deleted"
+  [ -e "$up/.claude/agents/researcher.md" ] \
+    && ok "--update keeps a customised file that upstream deleted" \
+    || bad "--update deleted a customised file"
+  case "$update_out" in
+    *researcher.md*) ok "--update names the customised file that upstream deleted" ;;
+    *) bad "--update did not report the customised file that upstream deleted" ;;
+  esac
   echo
 fi
 

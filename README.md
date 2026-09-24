@@ -170,9 +170,15 @@ project up to date from a clean tree:
 For each file under `.claude/agents/`, `hooks/`, `scripts/`, and `skills/`, it adds a file
 that is new, refreshes a file that the project never changed, and keeps a file that the
 project customised. It names every file it kept, with the `git diff` command that shows
-the upstream change. It merges new permission rules and hooks into `settings.json`. It
-never touches `CLAUDE.md` or `README.md`: when their templates changed, it prints the
-command that shows the change, and you port what applies.
+the upstream change. A file the project deleted stays deleted, and a file that upstream
+deleted is removed unless the project customised it.
+
+`settings.json` gets the same three-way merge against the installed commit. A rule or
+hook that is new upstream is added. One that the project removed stays removed, so you
+can drop a scaffold rule you do not want. One that upstream dropped is removed, which
+also replaces a hook whose command changed. It never touches `CLAUDE.md` or
+`README.md`: when their templates changed, it prints the command that shows the change,
+and you port what applies.
 
 ### The `.gitignore` entries are load-bearing
 
