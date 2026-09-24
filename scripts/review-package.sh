@@ -34,6 +34,9 @@ dir="$(git rev-parse --show-toplevel)/.superpowers/reviews"
 mkdir -p "$dir"
 [ -f "$dir/.gitignore" ] || printf '*\n' > "$dir/.gitignore"
 
+# The diff uses three dots: it runs from the merge base, so it shows what the
+# branch changed. Two dots would also show every commit the base gained after
+# the branch started, as a reverse change the reviewer would blame on the branch.
 file="$dir/${base_sha:0:10}-${head_sha:0:10}.md"
 {
   echo "# Review package: ${base_sha:0:10}..${head_sha:0:10}"
@@ -45,13 +48,13 @@ file="$dir/${base_sha:0:10}-${head_sha:0:10}.md"
   echo "## Diff stat"
   echo
   echo '```'
-  git diff --stat "$base_sha..$head_sha"
+  git diff --stat "$base_sha...$head_sha"
   echo '```'
   echo
   echo "## Diff"
   echo
   echo '```diff'
-  git diff -U10 "$base_sha..$head_sha"
+  git diff -U10 "$base_sha...$head_sha"
   echo '```'
 } > "$file"
 

@@ -3,10 +3,14 @@
 #
 # Usage:
 #   .claude/scripts/land-branch.sh <branch> <base> [-C <repo>]
+#   .claude/scripts/land-branch.sh --rebase-only <branch> <base> [-C <repo>]
 #
 # It rebases <branch> onto <base>, fast-forwards <base>, removes the branch's
 # worktree, and deletes the branch. It works whether or not either branch is
 # checked out, and in whichever worktree it is checked out.
+#
+# --rebase-only stops after the rebase. Run the tests on the rebased branch,
+# then run the script again without it to land.
 #
 # Why a script and not a sequence in CLAUDE.md: the written sequence failed in a
 # worktree ("already used by worktree"), and a failed step is where an agent
@@ -29,11 +33,17 @@ set -uo pipefail
 branch=""
 base=""
 repo="."
+rebase_only=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    -C) repo="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -C)
+      [ $# -ge 2 ] || { echo "-C needs a repository path" >&2; exit 2; }
+      repo=$2; shift 2 ;;
+    --rebase-only) rebase_only=1; shift ;;
+    -h|--help)
+      awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
+      exit 0 ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
     *)
       if [ -z "$branch" ]; then branch=$1
@@ -46,7 +56,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$branch" ] || [ -z "$base" ]; then
-  echo "usage: land-branch.sh <branch> <base> [-C <repo>]" >&2
+  echo "usage: land-branch.sh [--rebase-only] <branch> <base> [-C <repo>]" >&2
   exit 2
 fi
 
@@ -69,6 +79,10 @@ checkout_of() {
 main_wt=$(g worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')
 branch_wt=$(checkout_of "$branch")
 base_wt=$(checkout_of "$base")
+# From here on, run git from the main worktree by its absolute path. The
+# caller may sit inside the branch's worktree, which step 3 removes, and a
+# git command run from a deleted directory fails.
+repo=$main_wt
 
 is_dirty() { [ -n "$(git -C "$1" status --porcelain)" ]; }
 
@@ -98,6 +112,11 @@ else
   fi
   [ -n "$scratch" ] && g worktree remove "$scratch"
   say "rebased $branch onto $base"
+fi
+
+if [ "$rebase_only" -eq 1 ]; then
+  echo "Rebased $branch onto $base. Nothing landed. Test the branch, then run again without --rebase-only."
+  exit 0
 fi
 
 # --- 2. Fast-forward the base ---------------------------------------------------
@@ -149,6 +168,10 @@ elif g merge-base --is-ancestor "$branch" "$base"; then
   # points at the commit that was just landed.
   g update-ref -d "refs/heads/$branch" "$(g rev-parse "refs/heads/$branch")"
 fi
-[ -z "$(g rev-parse --verify -q "refs/heads/$branch")" ] && say "deleted the branch $branch"
+if g show-ref --verify -q "refs/heads/$branch"; then
+  say "kept the branch $branch"
+else
+  say "deleted the branch $branch"
+fi
 
 echo "Landed $branch on $base."
