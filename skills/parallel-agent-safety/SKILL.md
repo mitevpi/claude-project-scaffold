@@ -92,8 +92,10 @@ Know the limits of a worktree.
 - Give each agent its own dev database when the work touches migrations, or run those
   tasks serially.
 - `.worktrees/` must be in `.gitignore`. An unignored worktree directory commits a
-  whole second checkout into the repository. Run `git check-ignore -q .worktrees` to
-  confirm it before you create anything.
+  whole second checkout into the repository. Run `git check-ignore -q .worktrees/probe`
+  to confirm it before you create anything. Probe a path inside the directory: a
+  pattern such as `/.worktrees/` matches only a directory, so `git check-ignore
+  .worktrees` reports "not ignored" until the directory exists.
 
 When worktrees are disabled for the project, do not fan out write-capable agents at all.
 

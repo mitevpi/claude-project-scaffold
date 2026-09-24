@@ -803,6 +803,31 @@ case "$out" in
   *WARNING*other-session.txt* | *other-session.txt*WARNING*) ok "context hook warns about uncommitted work and lists it" ;;
   *) bad "context hook did not warn about uncommitted work" ;;
 esac
+# After a compaction or a resume, the changes are most likely this session's
+# own. Telling it that another session may own them makes it distrust its
+# own work. It still lists them.
+out=$(cd "$ctx_tmp" && echo '{"hook_event_name":"SessionStart","source":"compact"}' \
+  | CLAUDE_PROJECT_DIR="$ctx_tmp" "$CONTEXT_HOOK" 2>/dev/null)
+case "$out" in
+  *"another session"*) bad "context hook told a compacted session that its own changes may belong to another session" ;;
+  *other-session.txt*) ok "context hook lists the changes after a compaction without the ownership warning" ;;
+  *) bad "context hook listed nothing after a compaction" ;;
+esac
+out=$(cd "$ctx_tmp" && echo '{"hook_event_name":"SessionStart","source":"startup"}' \
+  | CLAUDE_PROJECT_DIR="$ctx_tmp" "$CONTEXT_HOOK" 2>/dev/null)
+case "$out" in
+  *"another session"*) ok "context hook warns a new session about work it did not make" ;;
+  *) bad "context hook did not warn a new session" ;;
+esac
+# A checkout whose path holds a space is still this checkout, not another one.
+sp_tmp="$ctx_tmp/with space"
+git -C "$ctx_tmp" stash -q -u
+git clone -q "$ctx_tmp" "$sp_tmp"
+out=$(cd "$sp_tmp" && CLAUDE_PROJECT_DIR="$sp_tmp" "$CONTEXT_HOOK" </dev/null 2>/dev/null)
+case "$out" in
+  *"Other worktrees"*) bad "context hook listed its own checkout as another worktree when the path has a space" ;;
+  *) ok "context hook recognises its own checkout when the path has a space" ;;
+esac
 out=$(cd /tmp && CLAUDE_PROJECT_DIR=/tmp "$CONTEXT_HOOK" </dev/null 2>/dev/null); code=$?
 [ "$code" -eq 0 ] && [ -z "$out" ] \
   && ok "context hook is silent outside a git repository" \

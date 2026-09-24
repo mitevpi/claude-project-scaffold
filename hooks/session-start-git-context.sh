@@ -13,6 +13,16 @@
 #
 # It reads state and changes nothing. It is silent outside a git repository,
 # and it always exits 0, so it can never stop a session from starting.
+#
+# SessionStart also fires on a resume and after a compaction. The changes are
+# then most likely the session's own, so the hook lists them without the
+# warning that another session may own them. It reads "source" from the
+# payload on stdin.
+
+source=""
+if [ ! -t 0 ]; then
+  source=$(cat | sed -n 's/.*"source"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p')
+fi
 
 dir="${CLAUDE_PROJECT_DIR:-$PWD}"
 cd "$dir" 2>/dev/null || exit 0
@@ -30,15 +40,32 @@ echo "- Branch: $branch"
 changes=$(git status --porcelain 2>/dev/null)
 if [ -n "$changes" ]; then
   count=$(printf '%s\n' "$changes" | wc -l | tr -d ' ')
-  echo "- WARNING: this checkout holds $count uncommitted change(s):"
+  case "$source" in
+    resume|compact)
+      echo "- This checkout holds $count uncommitted change(s), probably your own from earlier in this session:" ;;
+    *)
+      echo "- WARNING: this checkout holds $count uncommitted change(s):" ;;
+  esac
   printf '%s\n' "$changes" | head -20 | sed 's/^/    /'
   [ "$count" -gt 20 ] && echo "    ... and $((count - 20)) more"
-  echo "  Unless you made them earlier in this session, another session may own them."
-  echo "  Do not stash, restore, reset, or commit work you did not make. Report it to"
-  echo "  the user and ask before you change anything in this checkout."
+  case "$source" in
+    resume|compact)
+      echo "  Check any change you do not recognise with the user before you touch it." ;;
+    *)
+      echo "  Unless you made them earlier in this session, another session may own them."
+      echo "  Do not stash, restore, reset, or commit work you did not make. Report it to"
+      echo "  the user and ask before you change anything in this checkout." ;;
+  esac
 fi
 
-others=$(git worktree list 2>/dev/null | awk -v top="$top" '$1 != top')
+# The porcelain form gives each path on its own line, so a path with a space
+# in it stays whole.
+others=$(git worktree list --porcelain 2>/dev/null | awk -v top="$top" '
+  /^worktree / { path = substr($0, 10) }
+  /^branch / { ref = substr($0, 8); sub("^refs/heads/", "", ref) }
+  /^detached/ { ref = "(detached)" }
+  /^$/ { if (path != "" && path != top) print path "  [" ref "]"; path = ""; ref = "" }
+  END { if (path != "" && path != top) print path "  [" ref "]" }')
 if [ -n "$others" ]; then
   echo "- Other worktrees of this repository. Other sessions or agents may be working in them:"
   printf '%s\n' "$others" | head -20 | sed 's/^/    /'
