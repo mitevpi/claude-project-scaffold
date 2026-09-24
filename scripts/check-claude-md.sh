@@ -62,8 +62,11 @@ for name in CLAUDE.md README.md; do
   fi
 
   # "{{" not preceded by "$", so that a GitHub Actions expression such as
-  # ${{ secrets.X }} in a filled manual is not mistaken for a placeholder.
-  placeholder_re='(^|[^$])[{][{]'
+  # ${{ secrets.X }} in a filled manual is not mistaken for a placeholder, and
+  # not followed by a space, so that a Jinja, Go, or Handlebars expression
+  # such as {{ user.name }} is not either. No scaffold placeholder has a space
+  # after "{{".
+  placeholder_re='(^|[^$])[{][{]([^[:space:]]|$)'
   placeholders=$(grep -cE "$placeholder_re" "$file" || true)
   if [ "$placeholders" -gt 0 ]; then
     bad "$placeholders line(s) with an unfilled {{PLACEHOLDER}} in $name:"
@@ -88,22 +91,39 @@ else
 fi
 
 # --- 4. Companion files ------------------------------------------------------
+# The settings, the hooks, and land-branch.sh carry the mechanical controls,
+# so they are always required.
 for path in \
   ".claude/settings.json" \
   ".claude/hooks/block-subagent-git.sh" \
   ".claude/hooks/session-start-git-context.sh" \
-  ".claude/scripts/land-branch.sh" \
-  ".claude/scripts/review-package.sh" \
-  ".claude/agents/researcher.md" \
-  ".claude/agents/reviewer.md" \
-  ".claude/agents/implementer.md" \
-  ".claude/skills/parallel-agent-safety/SKILL.md" \
-  ".claude/skills/ste-writing/SKILL.md"
+  ".claude/scripts/land-branch.sh"
 do
   if [ -f "$ROOT/$path" ]; then
     ok "$path"
   else
-    bad "$path is missing. CLAUDE.md refers to it."
+    bad "$path is missing. It enforces part of CLAUDE.md."
+  fi
+done
+# The rest are required only while the manual names them. A project may drop
+# the Superpowers section or the ste-writing skill, together with its
+# mentions, and still pass.
+for pair in \
+  ".claude/scripts/review-package.sh review-package" \
+  ".claude/agents/researcher.md researcher" \
+  ".claude/agents/reviewer.md reviewer" \
+  ".claude/agents/implementer.md implementer" \
+  ".claude/skills/parallel-agent-safety/SKILL.md parallel-agent-safety" \
+  ".claude/skills/ste-writing/SKILL.md ste-writing"
+do
+  path=${pair%% *}
+  word=${pair#* }
+  if [ -f "$ROOT/$path" ]; then
+    ok "$path"
+  elif grep -qw -- "$word" "$MANUAL"; then
+    bad "$path is missing. CLAUDE.md refers to $word."
+  else
+    ok "$path is not installed, and CLAUDE.md does not refer to it"
   fi
 done
 
@@ -111,11 +131,11 @@ done
 # A hook on disk that settings.json does not register never runs. A check that
 # only looks for the file gives false confidence, so check the wiring too.
 # The deny rules below are the ones that stand between the main session and
-# lost work. The main session is not limited by the git hook, so these rules
-# are its only mechanical control.
+# lost work. The git hook backs them up only for the forms a rule cannot
+# match, such as "git -C <path> reset --hard".
 if [ -f "$ROOT/.claude/settings.json" ]; then
   if command -v python3 >/dev/null 2>&1; then
-    settings_report=$(python3 - "$ROOT/.claude/settings.json" <<'PY'
+    settings_report=$(python3 - "$ROOT/.claude/settings.json" "$ROOT/.claude/settings.local.json" <<'PY'
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
@@ -123,6 +143,28 @@ except ValueError:
     print("bad settings.json is not valid JSON")
     sys.exit(0)
 print("ok settings.json parses as JSON")
+
+# The manual calls the attribution rule and the subagent spawn limit
+# mechanical. A merge keeps a value the project already set, and a local
+# settings file overrides the shared one, so read both.
+try:
+    local = json.load(open(sys.argv[2]))
+except (OSError, ValueError):
+    local = {}
+def effective(key):
+    value = dict(d.get(key) or {})
+    value.update(local.get(key) or {})
+    return value
+attribution = effective("attribution")
+co_authored = local.get("includeCoAuthoredBy", d.get("includeCoAuthoredBy"))
+for kind in ("commit", "pr"):
+    value = attribution.get(kind)
+    if value is None and not (kind == "commit" and co_authored is False):
+        print("warn settings.json does not set attribution.%s to \"\", so Claude Code adds its own attribution, which the manual forbids" % kind)
+    elif value:
+        print("warn attribution.%s is set, so Claude Code adds attribution the manual forbids: %r" % (kind, value))
+if effective("env").get("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH") != "1":
+    print("warn CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH is not \"1\" in the env block, so a subagent may spawn subagents of its own")
 
 def registered(event, script):
     for group in d.get("hooks", {}).get(event, []):
@@ -189,6 +231,7 @@ PY
       case "$line" in
         ok\ *)  ok "${line#ok }" ;;
         bad\ *) bad "${line#bad }" ;;
+        warn\ *) caution "${line#warn }" ;;
         wire\ *) wired_command=${line#wire } ;;
       esac
     done <<EOF
@@ -269,7 +312,7 @@ fi
 # git decides what is ignored, so ask git. A grep passes on a commented-out
 # line and fails on an equivalent pattern.
 if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  for probe in ".worktrees/probe" ".claude/worktrees/probe" ".superpowers/probe"; do
+  for probe in ".worktrees/probe" "worktrees/probe" ".claude/worktrees/probe" ".superpowers/probe"; do
     dir=${probe%/probe}/
     if git -C "$ROOT" check-ignore -q "$probe"; then
       ok ".gitignore covers $dir"
@@ -297,6 +340,16 @@ done
 
 # --- 10. docs tree -----------------------------------------------------------
 [ -f "$ROOT/docs/index.md" ] && ok "docs/index.md" || caution "docs/index.md is missing"
+# The docs stubs carry placeholders too, and the manual sends the agent to
+# docs/architecture.md. A new project may not have the content yet, so this
+# warns instead of failing.
+for doc in "$ROOT"/docs/*.md; do
+  [ -f "$doc" ] || continue
+  n=$(grep -cE "$placeholder_re" "$doc" || true)
+  if [ "$n" -gt 0 ] || grep -q 'TEMPLATE USAGE' "$doc"; then
+    caution "${doc#"$ROOT"/} still holds $n placeholder line(s) or its usage block. Fill it in, or delete it and its links."
+  fi
+done
 for dir in "docs/superpowers/specs" "docs/superpowers/plans"; do
   [ -d "$ROOT/$dir" ] && ok "$dir/" || caution "$dir/ is missing. Superpowers writes there."
 done

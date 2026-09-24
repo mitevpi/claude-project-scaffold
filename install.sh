@@ -348,6 +348,7 @@ fi
 # An older install has the block but may lack a newer entry. Ask git whether
 # each load-bearing path is ignored, and append the entry for any that is not.
 for pair in "/.worktrees/ .worktrees/probe" \
+            "/worktrees/ worktrees/probe" \
             "/.claude/worktrees/ .claude/worktrees/probe" \
             ".superpowers/ .superpowers/probe" \
             "/.claude/settings.local.json .claude/settings.local.json"; do

@@ -420,12 +420,17 @@ In a target repository, run the check script instead:
 
 It verifies:
 
-- No placeholder or usage block remains.
-- Every companion file the manual refers to exists.
+- No placeholder or usage block remains in `CLAUDE.md` or `README.md`. A `{{ spaced }}`
+  expression, as Jinja and Go templates write it, is not a placeholder. The `docs/` stubs
+  get a warning, not a failure.
+- The hooks, the settings, and `land-branch.sh` exist, and so does every other companion
+  file the manual still names. Delete a skill and its mentions together.
+- The attribution setting and the subagent spawn limit are still in force.
 - `settings.json` registers both hooks, holds the required deny rules, and asks before an
   edit to the files that enforce them.
 - The registered hook command actually runs and blocks.
-- `.gitignore` covers the agent workspaces.
+- `.gitignore` covers the agent workspaces: `.worktrees/`, `worktrees/`,
+  `.claude/worktrees/`, and `.superpowers/`.
 - No personal skill shadows a project skill.
 - The manual is inside its line budget.
 

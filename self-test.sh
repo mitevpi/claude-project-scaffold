@@ -523,6 +523,34 @@ PY
     && bad "check-claude-md.sh missed a placeholder next to a \${{ }} expression" \
     || ok "check-claude-md.sh still catches a real placeholder"
   cp "$tmp/manual.saved" "$target/CLAUDE.md"
+  # Jinja, Go templates, and Handlebars write "{{ name }}" with spaces. No
+  # scaffold placeholder has a space after "{{", so that form is not one.
+  echo 'Emails render `{{ user.name }}` through Jinja.' >> "$target/CLAUDE.md"
+  "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1 \
+    && ok "check-claude-md.sh accepts a {{ spaced }} template expression" \
+    || bad "check-claude-md.sh mistook a {{ spaced }} template expression for a placeholder"
+  cp "$tmp/manual.saved" "$target/CLAUDE.md"
+
+  # A companion file is required only while the manual refers to it. The
+  # README invites deleting ste-writing, so deleting it and its mentions
+  # must pass, and deleting only the file must not.
+  cp -R "$target/.claude/skills/ste-writing" "$tmp/ste-writing.saved"
+  rm -rf "$target/.claude/skills/ste-writing"
+  "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1 \
+    && bad "check-claude-md.sh passed with a skill missing that the manual still names" \
+    || ok "check-claude-md.sh fails when the manual names a missing skill"
+  grep -v 'ste-writing' "$tmp/manual.saved" > "$target/CLAUDE.md"
+  "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1 \
+    && ok "check-claude-md.sh accepts a deleted skill that the manual no longer names" \
+    || bad "check-claude-md.sh failed on a skill that was deleted with its mentions"
+  cp -R "$tmp/ste-writing.saved" "$target/.claude/skills/ste-writing"
+  cp "$tmp/manual.saved" "$target/CLAUDE.md"
+
+  # The docs stubs carry placeholders too. The check warns about them.
+  case "$("$target/.claude/scripts/check-claude-md.sh" "$target" 2>&1)" in
+    *warn*docs/architecture.md*) ok "check-claude-md.sh warns about placeholders left in docs/" ;;
+    *) bad "check-claude-md.sh did not warn about placeholders in docs/" ;;
+  esac
 
   # The check must catch a hook that is on disk but not wired into settings.
   # Without the wiring, the hook never runs, and a pass is false confidence.
@@ -562,6 +590,21 @@ h["command"] = h["command"].replace(".claude/hooks/", ".claude/hook/")'
     ok "check-claude-md.sh fails when a required deny rule is missing"
   fi
   cp "$tmp/settings.saved" "$target/.claude/settings.json"
+  # The manual calls the attribution rule and the spawn limit mechanical. A
+  # merge keeps a value the project already set, so the check reports one
+  # that undoes them.
+  settings_edit "$target/.claude/settings.json" 'd["attribution"]["commit"] = "Co-Authored-By: Claude"'
+  case "$("$target/.claude/scripts/check-claude-md.sh" "$target" 2>&1)" in
+    *warn*attribution*) ok "check-claude-md.sh warns when settings.json turns commit attribution on" ;;
+    *) bad "check-claude-md.sh missed a commit attribution setting" ;;
+  esac
+  cp "$tmp/settings.saved" "$target/.claude/settings.json"
+  settings_edit "$target/.claude/settings.json" 'd["env"].pop("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH")'
+  case "$("$target/.claude/scripts/check-claude-md.sh" "$target" 2>&1)" in
+    *warn*CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH*) ok "check-claude-md.sh warns when the subagent spawn limit is gone" ;;
+    *) bad "check-claude-md.sh missed a missing subagent spawn limit" ;;
+  esac
+  cp "$tmp/settings.saved" "$target/.claude/settings.json"
   settings_edit "$target/.claude/settings.json" 'd["permissions"]["ask"].remove("Edit(/.claude/hooks/**)")'
   if "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1; then
     bad "check-claude-md.sh passed when an agent may edit the hooks without asking"
@@ -577,10 +620,14 @@ h["command"] = h["command"].replace(".claude/hooks/", ".claude/hook/")'
   "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1 \
     && bad "check-claude-md.sh accepted a commented-out .worktrees/ entry" \
     || ok "check-claude-md.sh rejects a commented-out .worktrees/ entry"
-  printf '/.worktrees\n/.claude/worktrees\n.superpowers\n' > "$target/.gitignore"
+  printf '/.worktrees\n/worktrees\n/.claude/worktrees\n.superpowers\n' > "$target/.gitignore"
   "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1 \
     && ok "check-claude-md.sh accepts equivalent .gitignore patterns" \
     || bad "check-claude-md.sh rejected equivalent .gitignore patterns"
+  printf '/.worktrees/\n/.claude/worktrees/\n.superpowers/\n' > "$target/.gitignore"
+  "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1 \
+    && bad "check-claude-md.sh accepted a .gitignore without worktrees/" \
+    || ok "check-claude-md.sh requires worktrees/, the other Superpowers worktree directory"
   cp "$tmp/gitignore.saved" "$target/.gitignore"
 
   # A personal skill with the same name shadows the project copy, because
@@ -663,13 +710,16 @@ PY
 
   # An older install already has the marker block but lacks a newer entry.
   # A reinstall must add the entry anyway.
-  grep -v 'claude/worktrees' "$existing/.gitignore" > "$tmp/gi" && cp "$tmp/gi" "$existing/.gitignore"
+  grep -v -e 'claude/worktrees' -e '^/worktrees/$' "$existing/.gitignore" > "$tmp/gi" && cp "$tmp/gi" "$existing/.gitignore"
   git -C "$existing" add .gitignore
   git -C "$existing" -c user.name=t -c user.email=t@t commit -qm "older gitignore"
   "$SNAP/install.sh" "$existing" >/dev/null 2>&1
   git -C "$existing" check-ignore -q ".claude/worktrees/x/f" \
     && ok "a reinstall adds a missing .gitignore entry to an existing block" \
     || bad "a reinstall did not add the missing .claude/worktrees/ entry"
+  git -C "$existing" check-ignore -q "worktrees/x/f" \
+    && ok "a reinstall adds a missing worktrees/ entry" \
+    || bad "a reinstall did not add the missing worktrees/ entry"
   git -C "$existing" add .gitignore
   git -C "$existing" -c user.name=t -c user.email=t@t commit -qm "reinstall" >/dev/null 2>&1
 
