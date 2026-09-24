@@ -118,6 +118,12 @@ setting() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(e
 [ "$(setting 'd["attribution"]["commit"] == "" and d["attribution"]["pr"] == ""')" = "True" ] \
   && ok "settings.json hides the commit and pull-request attribution" \
   || bad "settings.json does not hide attribution"
+# The files that enforce the rules must not change without the owner's yes.
+# Claude Code consults only Edit rules for file writes, and "/" anchors a
+# rule at the project root.
+[ "$(setting 'all(r in d["permissions"]["ask"] for r in ["Edit(/.claude/settings.json)", "Edit(/.claude/settings.local.json)", "Edit(/.claude/hooks/**)", "Edit(/.claude/scripts/**)", "Edit(/.claude/agents/**)"])')" = "True" ] \
+  && ok "settings.json asks before an edit to the settings, hooks, scripts, or agents" \
+  || bad "settings.json lets an agent edit its own controls without asking"
 
 # The Read deny rules must cover real secret files at any depth, and must not
 # cover .env.example, which the manual tells the agent to read. The matcher
@@ -290,6 +296,25 @@ expect block sub "$(printf 'cat <<EOF\n$(git push)\nEOF')"
 expect block sub '.claude/scripts/land-branch.sh feature main'
 expect block sub 'bash .claude/scripts/land-branch.sh feature main'
 expect block sub '/work/repo/.claude/scripts/land-branch.sh feature main'
+echo
+
+echo "Hook: a subagent may not rewrite the controls that limit it"
+# An implementer holds Bash. Without this, it could overwrite the hook with a
+# no-op and then push. The Edit ask rules in settings.json cover the Edit
+# and Write tools; this covers the shell.
+expect block sub 'echo "exit 0" > .claude/hooks/block-subagent-git.sh'
+expect block sub 'printf "{}" >.claude/settings.json'
+expect block sub 'cp /tmp/x .claude/hooks/block-subagent-git.sh'
+expect block sub 'rm .claude/scripts/land-branch.sh'
+expect block sub "sed -i '' 's/exit 2/exit 0/' .claude/hooks/block-subagent-git.sh"
+expect block sub 'tee .claude/settings.local.json < /tmp/x'
+expect block sub 'chmod -x /work/repo/.claude/hooks/block-subagent-git.sh'
+expect block sub 'mv .claude/agents/reviewer.md /tmp/'
+expect allow sub 'cat .claude/hooks/block-subagent-git.sh'
+expect allow sub "sed -n '1,20p' .claude/hooks/block-subagent-git.sh"
+expect allow sub 'cp .claude/agents/reviewer.md /tmp/reviewer.md'
+expect allow sub 'bash .claude/scripts/review-package.sh main HEAD'
+expect allow sub 'echo done > .claude/skills-notes.txt'
 echo
 
 echo "Hook: ordinary work is not caught by the stricter guards"
@@ -535,6 +560,13 @@ h["command"] = h["command"].replace(".claude/hooks/", ".claude/hook/")'
     bad "check-claude-md.sh passed with a required deny rule missing"
   else
     ok "check-claude-md.sh fails when a required deny rule is missing"
+  fi
+  cp "$tmp/settings.saved" "$target/.claude/settings.json"
+  settings_edit "$target/.claude/settings.json" 'd["permissions"]["ask"].remove("Edit(/.claude/hooks/**)")'
+  if "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1; then
+    bad "check-claude-md.sh passed when an agent may edit the hooks without asking"
+  else
+    ok "check-claude-md.sh fails when the hooks are not protected from edits"
   fi
   cp "$tmp/settings.saved" "$target/.claude/settings.json"
 

@@ -29,6 +29,11 @@
 # worktree, a stash, or a remote, and the rest. land-branch.sh is blocked
 # too, because it rebases and deletes a branch where the hook cannot see it.
 #
+# A subagent may also not write through the shell to the files that enforce
+# these rules: .claude/settings.json, settings.local.json, hooks/, scripts/,
+# and agents/. A redirection, cp, mv, rm, chmod, tee, or sed -i on one of
+# them is blocked. The Edit ask rules in settings.json cover the file tools.
+#
 # Two written CLAUDE.md rules become mechanical here:
 #   - "Stage explicit paths. Do not run git add -A." Blanket staging is
 #     blocked: -A, --all, -u, --force, interactive mode, and a pathspec that
@@ -162,6 +167,14 @@ ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # and HUSKY=0 disables husky.
 HOOK_ENV = re.compile(r"^(GIT_CONFIG\w*|HUSKY)=")
 GIT_WORD = re.compile(r"\bgit\b", re.I)
+# The files that enforce these rules. A subagent that could rewrite them
+# could switch the rules off. The Edit ask rules in settings.json cover the
+# Edit and Write tools; check_protected covers the shell.
+PROTECTED = re.compile(r"(^|/)\.claude/(hooks|scripts|agents)(/|$)|(^|/)\.claude/settings(\.local)?\.json$")
+REDIRECT = re.compile(r"^(\d*|&)>{1,2}\|?")
+WRITES_EVERY_ARG = {"rm", "mv", "chmod", "chown", "tee", "truncate", "unlink", "shred", "touch"}
+WRITES_LAST_ARG = {"cp", "install", "ln", "rsync"}
+EDITS_IN_PLACE = {"sed", "perl", "ruby"}
 HEREDOC = re.compile(r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([^\s;&|()<>]+))")
 
 CWD = ""
@@ -351,12 +364,37 @@ def git_policy(args):
         check_git_main(args)
 
 
+def check_protected(raw, seg):
+    """Block a shell write to a protected file. raw is the whole segment,
+    which holds any redirection. seg starts at the command that runs."""
+    targets = []
+    for j, t in enumerate(raw):
+        m = REDIRECT.match(t)
+        if m:
+            targets.append(t[m.end():] or (raw[j + 1] if j + 1 < len(raw) else ""))
+    if seg:
+        prog = os.path.basename(seg[0])
+        args = [a for a in seg[1:] if not a.startswith("-") and not REDIRECT.match(a)]
+        if prog in WRITES_EVERY_ARG:
+            targets += args
+        elif prog in WRITES_LAST_ARG:
+            targets += args[-1:]
+        elif prog in EDITS_IN_PLACE and any(a.startswith("-i") or a.startswith("--in-place") for a in seg[1:]):
+            targets += args
+    for t in targets:
+        if PROTECTED.search(t):
+            raise Blocked("This command writes to %s, one of the files that enforce the rules on you. Only the owner changes it." % t)
+
+
 def check_segment(seg, depth, text):
+    raw = seg
     if SUBAGENT:
         for w in seg:
             if HOOK_ENV.match(w) and GIT_WORD.search(text):
                 raise Blocked("%s switches off git hooks. A subagent may not set it." % w.split("=", 1)[0])
     seg = strip_prefix(seg)
+    if SUBAGENT:
+        check_protected(raw, seg)
     if not seg:
         return
     cmd = seg[0]

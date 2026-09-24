@@ -360,6 +360,10 @@ Stated plainly, because a scaffold that oversells its guarantees is worse than n
   fields in the tool payload. For the main session it blocks only the destructive
   commands that `settings.json` also denies. Every other git command in the main
   session rests on the ask rules and on your review.
+- **An agent could try to rewrite its own controls.** `settings.json` asks before any
+  edit to the settings, the hooks, the scripts, or the agent definitions, and the hook
+  blocks a subagent's shell writes to them, such as a redirection or `sed -i`. The main
+  session can still write them through Bash. Read every diff that touches `.claude/`.
 - **Two top-level sessions in one checkout are the largest risk.** The desktop app's
   parallel sessions, a second terminal, and `claude -p` are each a main session, so the
   git hook lets each of them commit, stash, and switch branches. They share one index and one working tree. The manual
@@ -412,7 +416,8 @@ It verifies:
 
 - No placeholder or usage block remains.
 - Every companion file the manual refers to exists.
-- `settings.json` registers both hooks and holds the required deny rules.
+- `settings.json` registers both hooks, holds the required deny rules, and asks before an
+  edit to the files that enforce them.
 - The registered hook command actually runs and blocks.
 - `.gitignore` covers the agent workspaces.
 - No personal skill shadows a project skill.
