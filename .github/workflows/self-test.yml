@@ -20,16 +20,13 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run self-test.sh
         run: ./self-test.sh
 
   shellcheck:
     runs-on: ubuntu-latest
-    # Advisory until the scripts have had a clean shellcheck run. Remove this
-    # line once the job passes, so that a new error fails the build.
-    continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run shellcheck
         run: shellcheck --severity=error install.sh self-test.sh hooks/*.sh scripts/*.sh
