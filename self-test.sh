@@ -46,6 +46,7 @@ caller, command = sys.argv[1], sys.argv[2]
 d = {
     "hook_event_name": "PreToolUse",
     "tool_name": "Bash",
+    "cwd": "/work/repo",
     "tool_input": {"command": command},
 }
 if caller == "sub":
@@ -229,6 +230,81 @@ expect block sub 'git worktree remove .worktrees/x'
 expect block sub 'git stash pop'
 expect block sub 'git remote add other https://example.com/x.git'
 expect block sub 'git reflog expire --all'
+echo
+
+echo "Hook: other spellings of a blocked action stay blocked"
+# git accepts any unique prefix of a long option, and a group of short
+# flags. A guard that compares whole words misses both.
+expect block sub 'git commit --no-verif -m "x"'
+expect block sub 'git commit --amen -m "x"'
+expect block sub 'git commit --al -m "x"'
+expect block sub 'git add --forc secrets.txt'
+expect block sub 'git add --upd src'
+expect block sub 'git add -fv .env'
+expect block sub 'git add -Av src'
+expect block sub 'git commit -im "x" src/a.ts'
+expect block sub 'git add --pathspec-from-file=list.txt'
+# A pathspec that names the whole tree is blanket staging, however it is spelt.
+expect block sub 'git add "$PWD"'
+expect block sub 'git add "$(git rev-parse --show-toplevel)"'
+expect block sub 'git add ./*'
+expect block sub 'git add "src/*.ts"'
+expect block sub "git add ':(top)'"
+expect block sub "git add ':!secrets'"
+expect block sub 'git add ./.'
+expect block sub 'git add /work/repo'
+expect block sub 'git add /work'
+# A pathspec on git commit commits the working tree, staged or not.
+expect block sub 'git commit -m "x" .'
+expect block sub 'git commit -m "x" -- :/'
+# Hooks can be switched off through configuration as well as flags.
+expect block sub 'git --config-env=core.hooksPath=X commit -m "x"'
+expect block sub 'git --config-env core.hooksPath=X commit -m "x"'
+expect block sub 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m "x"'
+expect block sub 'export GIT_CONFIG_PARAMETERS="core.hooksPath=/dev/null"; git commit -m "x"'
+expect block sub 'HUSKY=0 git commit -m "x"'
+echo
+
+echo "Hook: a git command cannot hide behind a run-time name or a wrapper"
+expect block sub 'G=git; $G push'
+expect block sub '$(echo git) push origin main'
+expect block sub '"$GIT" push origin main'
+expect block sub "echo \"\$(echo ')' ; git push)\""
+expect block sub "env -S 'git push origin main'"
+expect block sub "env --split-string='git push origin main'"
+expect block sub 'find . -maxdepth 0 -exec git push \;'
+expect block sub 'find . -maxdepth 0 -execdir git reset --hard {} +'
+expect block sub 'watch -n 5 git push'
+expect block sub "$(printf 'bash <<%sEOF%s\ngit push origin main\nEOF' "'" "'")"
+expect block sub "$(printf 'cat <<EOF\n$(git push)\nEOF')"
+# land-branch.sh rebases, fast-forwards, and deletes a branch. The hook
+# cannot see the git commands inside it, so it blocks the script itself.
+expect block sub '.claude/scripts/land-branch.sh feature main'
+expect block sub 'bash .claude/scripts/land-branch.sh feature main'
+expect block sub '/work/repo/.claude/scripts/land-branch.sh feature main'
+echo
+
+echo "Hook: ordinary work is not caught by the stricter guards"
+expect allow sub 'git add src/a.ts src/b.ts'
+expect allow sub 'git add /work/repo/src/a.ts'
+expect allow sub 'git add src'
+expect allow sub 'git add -v -- src/a.ts'
+expect allow sub 'git add -N src/new.ts'
+expect allow sub 'git commit -m "x" src/a.ts'
+expect allow sub 'git commit --author="A <a@b>" -m "x"'
+expect allow sub 'git commit --allow-empty -m "x"'
+expect allow sub 'git commit -S -m "x"'
+expect allow sub 'git commit -qm "x"'
+expect allow sub 'git commit -m "fix: the --amend flag and the -a flag in the docs"'
+expect allow sub 'git -c core.quotepath=off status'
+expect allow sub 'git show-ref'
+expect allow sub 'git ls-remote origin'
+expect allow sub '"$PYTHON" -m pytest'
+expect allow sub 'bash scripts/run-tests.sh && git status'
+# Claude Code writes a commit message through a heredoc. An apostrophe in the
+# message, or a line that mentions git, is data, not a command.
+expect allow sub "$(printf 'git commit -m "$(cat <<%sEOF%s\nDon%st run git add -A here.\n\nIt%ss safe (really).\nEOF\n)"' "'" "'" "'" "'")"
+expect allow sub "$(printf 'cat > notes.md <<%sEOF%s\nWe don%st git push from a subagent.\nEOF\ngit add notes.md' "'" "'" "'")"
 echo
 
 echo "Hook: read-only forms that Superpowers uses stay allowed"

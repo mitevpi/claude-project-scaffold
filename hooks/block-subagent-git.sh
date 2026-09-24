@@ -23,16 +23,22 @@
 # What stays with the orchestrator: every command that reshapes the
 # repository or publishes it. push, reset, checkout, switch, restore, merge,
 # rebase, cherry-pick, revert, clean, tag, creating or deleting a branch, a
-# worktree, a stash, or a remote, and the rest.
+# worktree, a stash, or a remote, and the rest. land-branch.sh is blocked
+# too, because it rebases and deletes a branch where the hook cannot see it.
 #
 # Two written CLAUDE.md rules become mechanical here:
 #   - "Stage explicit paths. Do not run git add -A." Blanket staging is
-#     blocked: -A, --all, -u, ".", "..", ":/", "*", --force, and interactive
-#     mode.
+#     blocked: -A, --all, -u, --force, interactive mode, and a pathspec that
+#     names the whole tree, such as ".", ":/", "*", or "$PWD".
 #   - "Never bypass a hook." git commit --no-verify and -n are blocked, and so
-#     is -c core.hooksPath=... on any git command. So are -a (which stages
-#     everything) and --amend (which rewrites a commit the orchestrator may
-#     already own).
+#     are core.hooksPath through -c, --config-env, or GIT_CONFIG_*, and
+#     HUSKY=0. So are -a (which stages everything), a pathspec on commit
+#     (which commits unstaged work), and --amend (which rewrites a commit the
+#     orchestrator may already own).
+#
+# git accepts any unique prefix of a long option, so "--amen" is "--amend".
+# The guards treat an option as dangerous when it is a prefix of a dangerous
+# one, and they read a group of short flags such as "-fv" letter by letter.
 #
 # How it decides:
 #   1. The PreToolUse payload arrives on stdin as JSON.
@@ -41,9 +47,13 @@
 #      for a main session started with "claude --agent".
 #   3. The command is split into shell words and segments. Every git command
 #      is inspected wherever it sits: after a path (/usr/bin/git), after
-#      env, nohup, xargs, or a variable assignment, inside $(...), `...`, a
-#      subshell, a { } group, an if or a for body, bash -c, sh -c, or eval.
-#   4. A git command is allowed only when its subcommand is on the allowlist
+#      env (including env -S), nohup, xargs, watch, or a variable assignment,
+#      inside $(...), `...`, a subshell, a { } group, an if or a for body,
+#      bash -c, sh -c, eval, find -exec, or a heredoc fed to a shell.
+#   4. A command whose name is built at run time, such as "$G push", is
+#      blocked when the command mentions git, because the hook cannot know
+#      what it runs.
+#   5. A git command is allowed only when its subcommand is on the allowlist
 #      and passes that subcommand's argument guard. An allowlist fails safe:
 #      a new or unknown subcommand is blocked, not permitted.
 #
@@ -117,39 +127,112 @@ READ_ONLY = {
     "rev-list", "ls-files", "ls-tree", "cat-file", "grep", "shortlog",
     "for-each-ref", "count-objects", "var", "merge-base", "check-ignore",
     "check-attr", "name-rev", "whatchanged", "cherry", "range-diff",
-    "help", "version",
+    "show-ref", "show-branch", "ls-remote", "diff-tree", "diff-files",
+    "diff-index", "verify-commit", "verify-tag", "help", "version",
 }
 SEPARATORS = {";", "&&", "||", "|", "|&", "&", "(", ")", "{", "}", "\n", ";;"}
 KEYWORDS = {"if", "then", "else", "elif", "fi", "do", "done", "while",
             "until", "for", "in", "case", "esac", "!", "time"}
-WRAPPERS = {"sudo", "env", "nohup", "nice", "timeout", "stdbuf", "command",
-            "builtin", "exec", "noglob", "xargs", "caffeinate"}
+WRAPPERS = {"sudo", "doas", "env", "nohup", "nice", "ionice", "timeout",
+            "stdbuf", "command", "builtin", "exec", "noglob", "xargs",
+            "caffeinate", "watch", "chronic", "unbuffer"}
+WRAPPER_VALUE_FLAGS = {"-n", "-u", "-g", "-s", "-k", "-I", "-L", "-P", "-c"}
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+# Scripts that run orchestrator-only git commands where the hook cannot see them.
+ORCHESTRATOR_SCRIPTS = {"land-branch.sh"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# Variables that switch off git hooks: GIT_CONFIG_* can set core.hooksPath,
+# and HUSKY=0 disables husky.
+HOOK_ENV = re.compile(r"^(GIT_CONFIG\w*|HUSKY)=")
+GIT_WORD = re.compile(r"\bgit\b", re.I)
+HEREDOC = re.compile(r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([^\s;&|()<>]+))")
+
+CWD = ""
 
 
 class Blocked(Exception):
     pass
 
 
-def substitutions(text):
-    """Yield the body of every $(...) and `...` in text, innermost included."""
-    for m in re.finditer(r"`([^`]*)`", text):
-        yield m.group(1)
-    depth, start = 0, None
-    i = 0
-    while i < len(text):
-        if text.startswith("$(", i):
-            if depth == 0:
-                start = i + 2
-            depth += 1
+def scan(text, i=0, inner=False):
+    """Walk shell text the way the shell quotes it.
+
+    Returns (flat, subs, bodies, end). flat is the text with every heredoc
+    body cut out, so that shlex can split it. subs holds the body of every
+    $(...) and `...`. bodies holds the lines of every heredoc. With inner
+    set, the walk starts inside a $( and stops at its closing parenthesis,
+    and end is the index of that parenthesis. Raises ValueError on an
+    unbalanced quote or parenthesis.
+    """
+    flat, subs, bodies, pending = [], [], [], []
+    n, dq, depth = len(text), False, 0
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            flat.append(text[i:i + 2])
             i += 2
             continue
-        if text[i] == ")" and depth:
-            depth -= 1
-            if depth == 0:
-                yield text[start:i]
+        if c == "'" and not dq:
+            j = text.find("'", i + 1)
+            if j < 0:
+                raise ValueError("unbalanced quote")
+            flat.append(text[i:j + 1])
+            i = j + 1
+            continue
+        if c == '"':
+            dq = not dq
+            flat.append(c)
+            i += 1
+            continue
+        if c == "`":
+            j = text.find("`", i + 1)
+            if j < 0:
+                raise ValueError("unbalanced backtick")
+            subs.append(text[i + 1:j])
+            flat.append(text[i:j + 1])
+            i = j + 1
+            continue
+        if text.startswith("$(", i):
+            _, _, _, end = scan(text, i + 2, inner=True)
+            subs.append(text[i + 2:end])
+            flat.append(text[i:end + 1])
+            i = end + 1
+            continue
+        if not dq and text.startswith("<<", i) and not text.startswith("<<<", i):
+            m = HEREDOC.match(text, i)
+            if m:
+                delim = next(g for g in m.groups()[1:] if g is not None)
+                pending.append((delim, m.group(1) == "-"))
+                flat.append(text[i:m.end()])
+                i = m.end()
+                continue
+        if c == "\n" and not dq and pending:
+            flat.append(c)
+            i += 1
+            for delim, strip_tabs in pending:
+                body = []
+                while i < n:
+                    j = text.find("\n", i)
+                    line = text[i:] if j < 0 else text[i:j]
+                    i = n if j < 0 else j + 1
+                    if (line.lstrip("\t") if strip_tabs else line) == delim:
+                        break
+                    body.append(line)
+                bodies.append(body)
+            pending = []
+            continue
+        if inner and not dq:
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                if depth == 0:
+                    return "".join(flat), subs, bodies, i
+                depth -= 1
+        flat.append(c)
         i += 1
+    if inner or dq:
+        raise ValueError("unbalanced quote or parenthesis")
+    return "".join(flat), subs, bodies, n
 
 
 def words(text):
@@ -182,13 +265,24 @@ def strip_prefix(seg):
         if w in KEYWORDS or ASSIGNMENT.match(w):
             i += 1
             continue
-        if os.path.basename(w) in WRAPPERS:
+        name = os.path.basename(w)
+        if name in WRAPPERS:
             i += 1
             while i < len(seg) and (seg[i].startswith("-") or ASSIGNMENT.match(seg[i])):
-                takes_value = seg[i] in ("-n", "-u", "-g", "-s", "-k", "-I", "-L", "-P")
-                i += 2 if takes_value else 1
+                opt = seg[i]
+                # env -S splits its argument into the command to run, and
+                # appends the words that follow it.
+                if name == "env" and (opt.startswith("-S") or opt.startswith("--split-string")):
+                    if opt in ("-S", "--split-string"):
+                        value, rest = (seg[i + 1] if i + 1 < len(seg) else ""), seg[i + 2:]
+                    elif opt.startswith("--split-string="):
+                        value, rest = opt.split("=", 1)[1], seg[i + 1:]
+                    else:
+                        value, rest = opt[2:], seg[i + 1:]
+                    return strip_prefix(words(value) + rest)
+                i += 2 if opt in WRAPPER_VALUE_FLAGS else 1
             # timeout takes a duration before the command.
-            if i < len(seg) and re.match(r"^\d+[smhd]?$", seg[i]):
+            if i < len(seg) and re.match(r"^\d+(\.\d+)?[smhd]?$", seg[i]):
                 i += 1
             continue
         break
@@ -196,30 +290,86 @@ def strip_prefix(seg):
 
 
 def analyse(text, depth=0):
-    if depth > 5:
+    if depth > 6:
         raise Blocked("The command nests shells too deeply to read.")
-    for body in substitutions(text):
-        analyse(body, depth + 1)
     try:
-        tokens = words(text)
+        flat, subs, bodies, _ = scan(text)
+        tokens = words(flat)
     except ValueError:
-        if "git" in text:
+        if GIT_WORD.search(text):
             raise Blocked("The command has unbalanced quotes, so the hook cannot read it.")
         return
+    for body in subs:
+        analyse(body, depth + 1)
+    for body in bodies:
+        for line in body:
+            analyse_data_line(line, depth + 1)
     for seg in segments(tokens):
-        seg = strip_prefix(seg)
-        if not seg:
-            continue
-        prog = os.path.basename(seg[0])
-        if prog == "git":
-            check_git(seg[1:])
-        elif prog in SHELLS:
-            for j, w in enumerate(seg[1:], 1):
-                if w.startswith("-") and not w.startswith("--") and "c" in w and j + 1 < len(seg):
+        check_segment(seg, depth, text)
+
+
+def analyse_data_line(line, depth):
+    """Read one line of a heredoc. The line may be commands for a shell, or
+    prose such as a commit message. A line that parses is read as commands.
+    A line that does not parse, such as "Don't run git add -A", is prose:
+    only a git command at the start of the line or after a separator counts."""
+    try:
+        scan(line)
+        words(line)
+    except ValueError:
+        for m in re.finditer(r"(?:^|[;&|(]\s*)git\s+(.*)", line):
+            check_git(m.group(1).split())
+        return
+    analyse(line, depth)
+
+
+def check_segment(seg, depth, text):
+    for w in seg:
+        if HOOK_ENV.match(w) and GIT_WORD.search(text):
+            raise Blocked("%s switches off git hooks. A subagent may not set it." % w.split("=", 1)[0])
+    seg = strip_prefix(seg)
+    if not seg:
+        return
+    cmd = seg[0]
+    if ("$" in cmd or "`" in cmd) and GIT_WORD.search(text):
+        raise Blocked("The command name %s is built at run time, so the hook cannot tell whether it runs git." % cmd)
+    prog = os.path.basename(cmd)
+    if prog in ORCHESTRATOR_SCRIPTS:
+        raise Blocked("%s rebases, lands, and deletes a branch. That belongs to the orchestrator." % prog)
+    if prog == "git":
+        check_git(seg[1:])
+    elif prog in SHELLS:
+        for j, w in enumerate(seg[1:], 1):
+            if w.startswith("--"):
+                continue
+            if w.startswith("-"):
+                if "c" in w and j + 1 < len(seg):
                     analyse(seg[j + 1], depth + 1)
-                    break
-        elif prog == "eval":
-            analyse(" ".join(seg[1:]), depth + 1)
+                    return
+                continue
+            if os.path.basename(w) in ORCHESTRATOR_SCRIPTS:
+                raise Blocked("%s rebases, lands, and deletes a branch. That belongs to the orchestrator." % os.path.basename(w))
+            return
+    elif prog in ("source", "."):
+        if len(seg) > 1 and os.path.basename(seg[1]) in ORCHESTRATOR_SCRIPTS:
+            raise Blocked("%s rebases, lands, and deletes a branch. That belongs to the orchestrator." % os.path.basename(seg[1]))
+    elif prog == "eval":
+        analyse(" ".join(seg[1:]), depth + 1)
+    elif prog == "find":
+        for j, w in enumerate(seg):
+            if w in ("-exec", "-execdir", "-ok", "-okdir"):
+                sub = []
+                for t in seg[j + 1:]:
+                    if t in (";", "+", "\\;"):
+                        break
+                    sub.append(t)
+                check_segment(sub, depth + 1, text)
+
+
+def check_config_key(pair):
+    key = pair.split("=", 1)[0].lower()
+    if key == "core.hookspath" or key.startswith("alias."):
+        raise Blocked("git -c %s changes which hooks or aliases run. A subagent may not." % key)
 
 
 def check_git(args):
@@ -229,11 +379,13 @@ def check_git(args):
         if a in ("-C", "--git-dir", "--work-tree", "--namespace", "--exec-path"):
             i += 2
             continue
-        if a == "-c":
-            key = args[i + 1].split("=", 1)[0].lower() if i + 1 < len(args) else ""
-            if key == "core.hookspath" or key.startswith("alias."):
-                raise Blocked("git -c %s changes which hooks or aliases run. A subagent may not." % key)
+        if a in ("-c", "--config-env"):
+            check_config_key(args[i + 1] if i + 1 < len(args) else "")
             i += 2
+            continue
+        if a.startswith("--config-env="):
+            check_config_key(a.split("=", 1)[1])
+            i += 1
             continue
         if a.startswith("-"):
             i += 1
@@ -264,54 +416,95 @@ def positionals(rest, takes_value=()):
     return out
 
 
+def abbreviates(arg, options):
+    """True when the long option arg names one of options, either whole or
+    as a prefix that git would expand to it."""
+    name = arg.split("=", 1)[0]
+    return len(name) > 2 and any(o.startswith(name) for o in options)
+
+
+def blanket_path(p):
+    """True when the pathspec p can stage or commit more than the files it
+    names: the whole tree, a glob, pathspec magic, or a path the shell builds
+    at run time."""
+    if not p or p.startswith(":") or "*" in p or "$" in p or "`" in p:
+        return True
+    norm = os.path.normpath(p)
+    if norm == "." or all(part == ".." for part in norm.split("/")):
+        return True
+    if os.path.isabs(norm) and CWD:
+        cwd = os.path.normpath(CWD)
+        if norm == "/" or cwd == norm or cwd.startswith(norm + "/"):
+            return True
+    return False
+
+
 def guard_config(rest):
     reads = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "-l"}
     if not reads & set(rest):
         raise Blocked("A subagent may only read git config, with --get or --list.")
 
 
+ADD_DANGER_LONG = ("--all", "--update", "--force", "--patch", "--interactive",
+                   "--edit", "--no-ignore-removal", "--pathspec-from-file")
+ADD_DANGER_SHORT = "Aufpie"
+
+
 def guard_add(rest):
-    blanket_flags = {"-A", "--all", "-u", "--update", "--no-ignore-removal",
-                     "-p", "--patch", "-i", "--interactive", "-e", "--edit",
-                     "-f", "--force"}
-    blanket_paths = {".", "./", ":", ":/", "*", "*.*", "..", "../", "../.."}
-    paths = []
+    paths, only_paths = [], False
     for a in rest:
-        if a in blanket_flags:
-            raise Blocked("git add %s stages more than the paths you name. Stage explicit paths instead." % a)
-        if a in blanket_paths:
-            raise Blocked('git add %s is blanket staging. It collects scratch files, local config, and secrets. Stage explicit paths instead.' % a)
-        if a != "--" and not a.startswith("-"):
+        if only_paths or not a.startswith("-"):
+            if blanket_path(a):
+                raise Blocked('git add %s is blanket staging. It collects scratch files, local config, and secrets. Stage explicit paths instead.' % a)
             paths.append(a)
+        elif a == "--":
+            only_paths = True
+        elif a.startswith("--"):
+            if abbreviates(a, ADD_DANGER_LONG):
+                raise Blocked("git add %s stages more than the paths you name. Stage explicit paths instead." % a)
+        elif any(ch in ADD_DANGER_SHORT for ch in a[1:]):
+            raise Blocked("git add %s stages more than the paths you name. Stage explicit paths instead." % a)
     if not paths:
         raise Blocked('Name the paths to stage. "git add" without an explicit path is not allowed.')
 
 
+COMMIT_DANGER_LONG = ("--all", "--no-verify", "--amend", "--include",
+                      "--interactive", "--patch", "--pathspec-from-file")
+COMMIT_VALUE_LONG = ("--message", "--file", "--reuse-message", "--reedit-message",
+                     "--template", "--author", "--date", "--cleanup", "--fixup",
+                     "--squash", "--trailer")
+COMMIT_BLOCKED = "Commit only what you staged, and never bypass a hook. -a, -n, --no-verify, --amend, and interactive mode are all blocked."
+
+
 def guard_commit(rest):
-    bypass = {"-a", "--all", "-n", "--no-verify", "--amend", "-i", "--include",
-              "--interactive", "-p", "--patch"}
-    value_flags = set("mFCct")
-    skip = False
+    skip, only_paths = False, False
     for a in rest:
         if skip:
             skip = False
             continue
-        if a in bypass:
-            raise Blocked("Commit only what you staged, and never bypass a hook. -a, -n, --no-verify, --amend, and interactive mode are all blocked.")
+        if only_paths or not a.startswith("-") or a == "-":
+            if blanket_path(a):
+                raise Blocked('git commit %s commits every change under it, staged or not. Stage explicit paths, then commit.' % a)
+            continue
+        if a == "--":
+            only_paths = True
+            continue
         if a.startswith("--"):
-            if a in ("--message", "--file", "--reuse-message", "--reedit-message", "--template", "--author", "--date", "--cleanup", "--fixup", "--squash", "--trailer"):
+            if abbreviates(a, COMMIT_DANGER_LONG):
+                raise Blocked(COMMIT_BLOCKED)
+            if "=" not in a and abbreviates(a, COMMIT_VALUE_LONG):
                 skip = True
             continue
-        if a.startswith("-") and len(a) > 1:
-            if a.startswith("-u"):
-                continue
-            for pos, ch in enumerate(a[1:]):
-                if ch in "anp":
-                    raise Blocked("Commit only what you staged, and never bypass a hook. -a, -n, --no-verify, --amend, and interactive mode are all blocked.")
-                if ch in value_flags:
-                    # The rest of the group, or the next word, is the value.
-                    skip = pos == len(a) - 2
-                    break
+        for pos, ch in enumerate(a[1:]):
+            if ch in "anpi":
+                raise Blocked(COMMIT_BLOCKED)
+            if ch in "mFCct":
+                # The rest of the group, or the next word, is the value.
+                skip = pos == len(a) - 2
+                break
+            if ch in "uS":
+                # -u and -S take an optional value in the same word.
+                break
 
 
 def guard_branch(rest):
@@ -349,7 +542,7 @@ def guard_listing_only(name, allowed):
 
 def guard_reflog(rest):
     pos = positionals(rest)
-    if pos and pos[0] in ("expire", "delete"):
+    if pos and pos[0] in ("expire", "delete", "drop"):
         raise Blocked("git reflog %s destroys the history that recovers lost work." % pos[0])
 
 
@@ -365,8 +558,9 @@ GUARDS = {
 }
 
 try:
-    command = json.loads(os.environ["HOOK_PAYLOAD"]).get("tool_input", {}).get("command", "")
-    analyse(command)
+    data = json.loads(os.environ["HOOK_PAYLOAD"])
+    CWD = data.get("cwd") or ""
+    analyse(data.get("tool_input", {}).get("command", ""))
 except Blocked as e:
     with open(os.environ["HOOK_OUT"], "w") as f:
         f.write(str(e))
