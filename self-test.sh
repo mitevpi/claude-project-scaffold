@@ -79,6 +79,14 @@ expect() {
   fi
 }
 
+# $1 = allow|block. $2 = label. $3 = raw payload text.
+raw_expect() {
+  printf '%s' "$3" | "$HOOK" >/dev/null 2>&1
+  code=$?
+  want_code=0; [ "$1" = block ] && want_code=2
+  [ "$code" -eq "$want_code" ] && ok "$1: $2" || bad "$1: $2 [exit $code, wanted $want_code]"
+}
+
 echo "Self-test: $ROOT"
 echo
 
@@ -332,13 +340,6 @@ expect allow sub "$(printf 'git add a.ts\ngit commit -m "feat: a"')"
 echo
 
 echo "Hook: a subagent command it cannot read is blocked, not allowed"
-raw_expect() {
-  # $1 = allow|block. $2 = label. $3 = raw payload text.
-  printf '%s' "$3" | "$HOOK" >/dev/null 2>&1
-  code=$?
-  want_code=0; [ "$1" = block ] && want_code=2
-  [ "$code" -eq "$want_code" ] && ok "$1: $2" || bad "$1: $2 [exit $code, wanted $want_code]"
-}
 raw_expect block "truncated subagent JSON that mentions git" '{"agent_id":"a1","tool_input":{"command":"git reset --hard'
 raw_expect allow "truncated subagent JSON with no git in it" '{"agent_id":"a1","tool_input":{"command":"npm te'
 raw_expect allow "a main session started with --agent is not a subagent" \
@@ -348,9 +349,57 @@ echo
 echo "Hook: non-git and the main session pass through"
 expect allow sub 'npm test'
 expect allow sub 'grep -rn "TODO" src/'
-expect allow main 'git reset --hard HEAD~1'
 expect allow main 'git add -A'
-expect allow main 'git push --force origin main'
+expect allow main 'git rebase main'
+expect allow main 'git merge --ff-only feature'
+expect allow main 'git switch -c feature'
+expect allow main 'git checkout main'
+expect allow main 'git push origin feature'
+expect allow main 'git reset HEAD~1'
+expect allow main 'git restore src/a.ts'
+expect allow main 'git branch -d feature'
+expect allow main 'git worktree remove .worktrees/x'
+expect allow main 'git stash pop'
+expect allow main 'git clean -n'
+expect allow main 'git gc'
+expect allow main 'G=git; $G push'
+raw_expect allow "truncated main-session JSON" '{"tool_input":{"command":"git reset --hard'
+echo
+
+echo "Hook: the main session never runs a command that destroys work"
+# settings.json denies these, but a deny rule matches the command string as
+# written. "git -C <path> reset --hard" and "env git reset --hard" do not
+# start with "git reset --hard", so the hook catches them for every session.
+expect block main 'git reset --hard HEAD~1'
+expect block main 'git -C .worktrees/x reset --hard'
+expect block main 'env git reset --hard HEAD'
+expect block main 'bash -c "git clean -fd"'
+expect block main 'git -C .worktrees/x clean -fdx'
+expect block main 'git push --force origin main'
+expect block main 'git push -f'
+expect block main 'git -C .worktrees/x push --force-with-lease'
+expect block main 'git push origin +main'
+expect block main 'git checkout -- .'
+expect block main 'git -C .worktrees/x checkout .'
+expect block main 'git checkout -f main'
+expect block main 'git switch --discard-changes main'
+expect block main 'git switch -f main'
+expect block main 'git restore .'
+expect block main 'git -C .worktrees/x restore --staged .'
+expect block main 'git branch -D feature'
+expect block main 'git -C .worktrees/x branch -D feature'
+expect block main 'git branch -df feature'
+expect block main 'git branch --delete --force feature'
+expect block main 'git branch -f feature HEAD'
+expect block main 'git worktree remove --force .worktrees/x'
+expect block main 'git worktree remove .worktrees/x -f'
+expect block main 'git filter-branch --tree-filter true HEAD'
+expect block main 'git update-ref -d refs/heads/feature'
+expect block main 'git reflog expire --expire=now --all'
+expect block main 'git gc --prune=now'
+expect block main 'git prune'
+expect block main 'git stash drop'
+expect block main 'git -C .worktrees/x stash clear'
 echo
 
 # --- 4. End-to-end install --------------------------------------------------

@@ -139,8 +139,8 @@ These git rules are a deliberate override of the plugin's defaults, not drift.
 
 `settings.json` denies most of these. The list stands where a rule does not reach.
 
-- A force push to a shared branch, or a rewrite of history you already pushed. Use
-  `--force-with-lease` on your own branch only.
+- A force push of any kind, `--force-with-lease` included, or a rewrite of history you
+  already pushed. The owner runs a force push by hand.
 - `--no-verify`, or any other bypass of a hook, a linter, or CI.
 - `git reset --hard`, `git clean`, a forced worktree removal, or anything else that
   destroys uncommitted work you did not create.
@@ -153,8 +153,8 @@ One destructive command from one agent acts on the whole repository. Read
 `superpowers:dispatching-parallel-agents` and the `parallel-agent-safety` skill before a
 wave. These rules are absolute. They override any plan, skill, or subagent prompt.
 
-- **One session per checkout.** Two top-level sessions in one checkout share one index and
-  one working tree, and the git hook limits neither. Start each parallel session in its
+- **One session per checkout.** Two top-level sessions share one index and one working
+  tree, and the git hook lets both stash and commit. Start each parallel session in its
   own worktree: `claude --worktree <name>`, or the desktop app's worktree option. The
   session-start hook lists uncommitted work and other worktrees. Work you did not make
   belongs to someone else: report it, and never stash, restore, or commit it.
