@@ -167,6 +167,22 @@ if missing:
     print("bad settings.json lacks %d required deny rule(s): %s" % (len(missing), ", ".join(missing)))
 else:
     print("ok settings.json holds the required deny rules")
+
+# The files that enforce the rules must not change without the owner's yes.
+# A deny rule counts too: it is stricter than ask.
+protect = [
+    "Edit(/.claude/settings.json)",
+    "Edit(/.claude/settings.local.json)",
+    "Edit(/.claude/hooks/**)",
+    "Edit(/.claude/scripts/**)",
+    "Edit(/.claude/agents/**)",
+]
+guarded = deny + d.get("permissions", {}).get("ask", [])
+missing = [r for r in protect if r not in guarded]
+if missing:
+    print("bad settings.json lets an agent edit its own controls without asking: add %s to ask" % ", ".join(missing))
+else:
+    print("ok settings.json asks before an edit to the settings, hooks, scripts, or agents")
 PY
 )
     while IFS= read -r line; do
