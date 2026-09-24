@@ -63,7 +63,8 @@ CLAUDE-light.md               the same manual with a simpler git model
 README-template.md            the public README template
 install.sh                    copies the payload into a target repository
 self-test.sh                  this repository's own test suite
-dev/                          scaffold-only tooling, never installed
+dev/                          scaffold-only tooling, never installed: the settings
+                              merge, and the light-manual build and its fragments
 settings.json              -> <target>/.claude/settings.json
 agents/
   researcher.md               read-only. No shell. For exploration and fact-finding.
@@ -152,7 +153,7 @@ Commit or stash your work first, then run the same command. The installer skips 
 scaffold's rules and hooks into your `.claude/settings.json`, and appends the required
 `.gitignore` entries.
 Then merge the template's `CLAUDE.md` into yours by hand, section by section. The sections
-that repay the effort first are section 2 (commands) and the invariants list in section 1.
+that repay the effort first are the Commands table and the invariants list under Project.
 
 ### Updating an installed project
 
@@ -189,7 +190,10 @@ and an equivalent pattern passes. A reinstall adds any entry that an older block
 
 ## FULL or light
 
-The two manual templates differ in section 4, the git model, and in nothing else.
+The two manual templates differ in the Git section's branch model, and in nothing else.
+`CLAUDE-light.md` is generated: `dev/build-light.py` builds it from `CLAUDE-template.md`
+and the two fragments in `dev/light-variant.md`, and the self-test fails when the file is
+stale. Edit the FULL template or the fragments, never the light file itself.
 
 | | `CLAUDE-template.md` (FULL) | `CLAUDE-light.md` |
 | --- | --- | --- |
@@ -197,10 +201,15 @@ The two manual templates differ in section 4, the git model, and in nothing else
 | Use it when | `main` is protected, other people share the repo, or releases cut from another branch. | You are solo, and you own `main`. |
 | Install | `./install.sh <target>` | `./install.sh --light <target>` |
 
-Both land at about 330 lines once filled in. That file is read in full in every session,
-so every line costs context in every turn. The check script warns above 340 lines. Move a
+Both land at about 250 lines once filled in. That file is read in full in every session,
+so every line costs context in every turn. The check script warns above 260 lines. Move a
 topic into `docs/` or into a skill when it outgrows a short section, and leave a one-line
-link behind.
+link behind. The manual restates a Superpowers skill only where it overrides it; the
+plugin's own skills carry the rest.
+
+Sections refer to each other by name, never by number, so you can delete a section that
+does not apply, such as the Superpowers workflow, without breaking a reference. The
+self-test fails on any numbered reference.
 
 ## How it works with Superpowers
 
@@ -354,7 +363,7 @@ Stated plainly, because a scaffold that oversells its guarantees is worse than n
   costs many times a single conversation. For a small change this process is more expensive
   than doing it yourself, and the approval gate on every path adds turns.
 - **A stale `CLAUDE.md` is worse than no `CLAUDE.md`.** A wrong command in the table sends
-  an agent down a path with total confidence. The update triggers in section 6 exist for
+  an agent down a path with total confidence. The update triggers under Documentation exist for
   this reason, and they only work if you honour them.
 - **The line budget is a real constraint.** The manual is re-read every session. Anything
   you add is paid for in every turn, for the life of the repository.
@@ -362,7 +371,7 @@ Stated plainly, because a scaffold that oversells its guarantees is worse than n
   against version 6.4.1. A plugin release can move a default path or change a skill's
   process. See the next section.
 - **The writing rules are opinionated.** The ASD-STE100 rules make output terse and
-  literal. Some people read that as curt. Delete section 9 and the `ste-writing` skill if
+  literal. Some people read that as curt. Delete the Style section's first rule and the `ste-writing` skill if
   you do not want it; nothing else depends on them.
 - **`git config` is readable by a subagent.** The hook allows `--get` and `--list`, which
   is enough to read a user name and email. That is intentional, because commits need a
@@ -425,11 +434,12 @@ marketplace only. Two installs, such as `claude-plugins-official` and
 Read `CLAUDE-template.md` first. It is the manual this repository would install into
 itself, and it describes the working agreements a change here is judged against.
 
-- Run `./self-test.sh` before you open a pull request. Add a test case for any behaviour
-  you change in the hook or the installer.
+- Run `./self-test.sh` before you open a pull request. CI runs it on Ubuntu and macOS,
+  because `/bin/sh` is dash on one and bash 3.2 on the other. Add a test case for any
+  behaviour you change in a hook, a script, or the installer, and watch it fail first.
 - The scaffold's own prose follows the `ste-writing` rules. So does this file.
-- Keep the two manual variants different in section 4 only. A divergence anywhere else is
-  a bug.
+- Edit `CLAUDE-template.md` or `dev/light-variant.md`, then run
+  `python3 dev/build-light.py --write`. Never edit `CLAUDE-light.md` by hand.
 
 ## License
 

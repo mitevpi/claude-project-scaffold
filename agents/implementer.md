@@ -35,7 +35,7 @@ Report every commit you made with its short SHA and subject.
 
 ## Shell
 
-- Run the test, lint, and typecheck commands from section 2 of CLAUDE.md.
+- Run the test, lint, and typecheck commands from the Commands section of CLAUDE.md.
 - Run the focused test for what you are changing while you iterate. Run the full suite once before you commit, not after every edit.
 - Do not install, add, remove, or upgrade a dependency.
 - Do not delete or move a file outside your write scope.

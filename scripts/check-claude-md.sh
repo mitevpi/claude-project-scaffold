@@ -25,7 +25,7 @@ else
 fi
 
 MANUAL="$ROOT/CLAUDE.md"
-BUDGET="${CLAUDE_MD_LINE_BUDGET:-340}"
+BUDGET="${CLAUDE_MD_LINE_BUDGET:-260}"
 
 fail=0
 warn=0
@@ -56,15 +56,18 @@ for name in CLAUDE.md README.md; do
   file="$ROOT/$name"
   if [ ! -f "$file" ]; then
     if [ "$name" = "README.md" ]; then
-      bad "README.md is missing. CLAUDE.md section 6 requires it."
+      bad "README.md is missing. The Documentation section of CLAUDE.md requires it."
     fi
     continue
   fi
 
-  placeholders=$(grep -c '{{' "$file" || true)
+  # "{{" not preceded by "$", so that a GitHub Actions expression such as
+  # ${{ secrets.X }} in a filled manual is not mistaken for a placeholder.
+  placeholder_re='(^|[^$])[{][{]'
+  placeholders=$(grep -cE "$placeholder_re" "$file" || true)
   if [ "$placeholders" -gt 0 ]; then
-    bad "$placeholders unfilled {{PLACEHOLDER}} marker(s) in $name:"
-    grep -n '{{' "$file" | sed 's/^/          /' | head -20
+    bad "$placeholders line(s) with an unfilled {{PLACEHOLDER}} in $name:"
+    grep -nE "$placeholder_re" "$file" | sed 's/^/          /' | head -20
   else
     ok "$name has no unfilled placeholders"
   fi

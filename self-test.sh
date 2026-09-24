@@ -13,7 +13,8 @@
 #      merges into an existing project, and refuses a target it cannot undo.
 #   5. session-start-git-context.sh warns about work already in the checkout.
 #   6. land-branch.sh lands a branch, and every refusal loses nothing.
-#   7. The two CLAUDE.md variants differ in section 4 and nowhere else.
+#   7. review-package.sh writes a correct package for the shell-less reviewer.
+#   8. CLAUDE-light.md is generated from CLAUDE-template.md, and both stay in budget.
 #
 # scripts/ is the payload that install.sh copies into a target repository, so
 # scaffold-only tooling lives here at the root and in dev/ instead.
@@ -361,6 +362,18 @@ PY
     "$target/.claude/scripts/check-claude-md.sh" "$target" 2>&1 | sed 's/^/          /'
   fi
 
+  # A GitHub Actions expression such as ${{ secrets.X }} is not a placeholder.
+  cp "$target/CLAUDE.md" "$tmp/manual.saved"
+  echo 'CI reads the token from `${{ secrets.DEPLOY_TOKEN }}`.' >> "$target/CLAUDE.md"
+  "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1 \
+    && ok "check-claude-md.sh accepts a \${{ }} expression in a filled manual" \
+    || bad "check-claude-md.sh mistook a \${{ }} expression for a placeholder"
+  echo 'Owner: {{OWNER_NAME}}' >> "$target/CLAUDE.md"
+  "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1 \
+    && bad "check-claude-md.sh missed a placeholder next to a \${{ }} expression" \
+    || ok "check-claude-md.sh still catches a real placeholder"
+  cp "$tmp/manual.saved" "$target/CLAUDE.md"
+
   # The check must catch a hook that is on disk but not wired into settings.
   # Without the wiring, the hook never runs, and a pass is false confidence.
   settings_edit() {
@@ -522,6 +535,37 @@ PY
   else
     bad "install.sh installed into a directory that is not a git repository"
   fi
+  echo
+
+  # --light installs the light manual, and a filled light install passes.
+  lt="$tmp/light-target"
+  mkdir -p "$lt"; git -C "$lt" init -q -b main
+  "$SNAP/install.sh" --light "$lt" >/dev/null 2>&1
+  grep -q '^LIGHT variant' "$lt/CLAUDE.md" && grep -q '^variant light$' "$lt/.claude/scaffold-version" \
+    && ok "install.sh --light installs and records the light manual" \
+    || bad "install.sh --light did not install the light manual"
+  python3 - "$lt" <<'PY'
+import re, sys, pathlib
+root = pathlib.Path(sys.argv[1])
+for name in ("CLAUDE.md", "README.md"):
+    p = root / name
+    text = re.sub(r"<!--\s*TEMPLATE USAGE.*?-->\n?", "", p.read_text(), flags=re.S)
+    p.write_text(re.sub(r"\{\{[^}]*\}\}", "placeholder", text))
+PY
+  "$lt/.claude/scripts/check-claude-md.sh" "$lt" >/dev/null 2>&1 \
+    && ok "check-claude-md.sh passes on a filled light install" \
+    || bad "check-claude-md.sh failed on a filled light install"
+
+  # --force overwrites, and git can undo it, because the tree was clean.
+  ft="$tmp/force-target"
+  mkdir -p "$ft"; git -C "$ft" init -q -b main
+  echo "# Our own manual" > "$ft/CLAUDE.md"
+  git -C "$ft" add CLAUDE.md; git -C "$ft" commit -qm own
+  "$SNAP/install.sh" --force "$ft" >/dev/null 2>&1
+  git -C "$ft" restore CLAUDE.md
+  [ "$(cat "$ft/CLAUDE.md")" = "# Our own manual" ] \
+    && ok "a --force install is undone by git restore" \
+    || bad "a --force install could not be undone"
   echo
 
   # --- Versions and updates ---------------------------------------------------
@@ -759,22 +803,36 @@ fi
 rm -rf "$pkg_tmp"
 echo
 
-# --- 8. The two manual variants diverge in section 4 only -------------------
-# README.md and both usage blocks promise this. A divergence anywhere else means
-# a fix landed in one variant and not the other.
-if [ -f "$ROOT/CLAUDE-template.md" ] && [ -f "$ROOT/CLAUDE-light.md" ]; then
-  echo "Manual variants"
-  strip="$ROOT/dev/strip-variant.py"
-  if diff <(python3 "$strip" "$ROOT/CLAUDE-template.md") \
-          <(python3 "$strip" "$ROOT/CLAUDE-light.md") >/dev/null; then
-    ok "the variants match outside section 4"
-  else
-    bad "the variants diverge outside section 4:"
-    diff <(python3 "$strip" "$ROOT/CLAUDE-template.md") \
-         <(python3 "$strip" "$ROOT/CLAUDE-light.md") | sed 's/^/          /' | head -20
-  fi
-  echo
+# --- 8. The light manual is generated from the FULL one ----------------------
+# The two variants differ only in the usage note and the Git section's branch
+# model. dev/build-light.py builds the light file from the FULL one and the
+# fragments in dev/light-variant.md, so a fix can never land in one variant
+# and miss the other.
+echo "Manual variants"
+if python3 "$ROOT/dev/build-light.py" 2>/dev/null | cmp -s - "$ROOT/CLAUDE-light.md"; then
+  ok "CLAUDE-light.md matches the output of dev/build-light.py"
+else
+  bad "CLAUDE-light.md is stale or hand-edited. Run: python3 dev/build-light.py --write"
 fi
+for f in CLAUDE-template.md CLAUDE-light.md; do
+  n=$(python3 - "$ROOT/$f" <<'PY'
+import re, sys
+text = re.sub(r"<!--\s*TEMPLATE USAGE.*?-->\n?", "", open(sys.argv[1]).read(), flags=re.S)
+print(text.count("\n"))
+PY
+)
+  [ "$n" -le 240 ] && ok "$f is $n lines without its usage block (budget 240)" \
+    || bad "$f is $n lines without its usage block, over the 240-line budget"
+done
+if grep -nE '[Ss]ection [0-9]' "$ROOT"/CLAUDE-*.md "$ROOT"/README*.md "$ROOT"/agents/*.md \
+     "$ROOT"/skills/*/SKILL.md "$ROOT"/docs/*.md "$ROOT"/scripts/*.sh >/dev/null; then
+  bad "a file refers to a manual section by number. Use the section name:"
+  grep -nE '[Ss]ection [0-9]' "$ROOT"/CLAUDE-*.md "$ROOT"/README*.md "$ROOT"/agents/*.md \
+    "$ROOT"/skills/*/SKILL.md "$ROOT"/docs/*.md "$ROOT"/scripts/*.sh | sed "s|$ROOT/|          |"
+else
+  ok "no file refers to a manual section by number"
+fi
+echo
 
 # --- Report -----------------------------------------------------------------
 if [ "$fail" -gt 0 ]; then

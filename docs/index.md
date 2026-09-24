@@ -6,7 +6,7 @@ TEMPLATE USAGE (delete this block once the index has real entries)
 Every file under `docs/` gets one line here, with a one-line description. An
 undiscoverable document is an unread document.
 
-CLAUDE.md section 6 holds the rule that governs this directory: `CLAUDE.md` is
+The Documentation section of CLAUDE.md holds the rule that governs this directory: `CLAUDE.md` is
 the internal operating manual, `README.md` is the public document, and `docs/`
 holds everything long.
 -->
@@ -19,7 +19,7 @@ holds everything long.
 
 ## Research
 
-Read-only findings, written up as deliverables. CLAUDE.md section 6 requires every
+Read-only findings, written up as deliverables. The Documentation section of CLAUDE.md requires every
 research answer to land here before the session ends. Cite every source.
 
 | Document | What it holds |

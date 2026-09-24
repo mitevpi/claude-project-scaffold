@@ -6,7 +6,7 @@ TEMPLATE USAGE (delete this block once the document has real content)
 CLAUDE.md holds the 5 to 15 line mental model. This file holds the long form:
 the diagrams, the data flows, and the reasoning behind each boundary.
 
-Keep the two consistent. CLAUDE.md section 6 requires you to revise both in the
+Keep the two consistent. The Documentation section of CLAUDE.md requires you to revise both in the
 same commit as any change that moves an architectural boundary.
 -->
 

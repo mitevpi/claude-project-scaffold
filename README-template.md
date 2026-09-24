@@ -4,13 +4,13 @@
 TEMPLATE USAGE (delete this block once filled in)
 
 This is the public document. `CLAUDE.md` is the internal operating manual and
-`docs/` holds the long-form detail. CLAUDE.md section 6 sets the split.
+`docs/` holds the long-form detail. The Documentation section of CLAUDE.md sets the split.
 
 1. Fill every `{{PLACEHOLDER}}`. Delete any section that does not apply. A
    half-filled README costs a reader more than a short one.
 2. Write for a person who has never seen this repository and has ten minutes.
    The first screen must answer: what is this, is it for me, how do I run it.
-3. Do not duplicate CLAUDE.md. The commands table in CLAUDE.md section 2 is the
+3. Do not duplicate CLAUDE.md. The commands table in the Commands section of CLAUDE.md is the
    single source of truth. Repeat here only the handful a contributor needs on
    the first day, and keep the two consistent in the same commit.
 4. Keep the file under ~200 lines. Link into `docs/` for depth.
@@ -108,7 +108,7 @@ CLAUDE.md          the internal operating manual for coding agents
 
 ## Development
 
-{{CLAUDE.md section 2 holds the full command table. Repeat only the first-day
+{{The Commands section of CLAUDE.md holds the full command table. Repeat only the first-day
 commands here.}}
 
 | Purpose | Command |

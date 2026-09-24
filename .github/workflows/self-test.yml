@@ -1,0 +1,35 @@
+# Runs the scaffold's own test suite on every push and pull request.
+#
+# Two operating systems, because the hooks run under /bin/sh, and /bin/sh is
+# dash on Ubuntu and bash 3.2 on macOS. A construct that one of them misparses
+# fails here instead of failing open in a project.
+name: self-test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run self-test.sh
+        run: ./self-test.sh
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    # Advisory until the scripts have had a clean shellcheck run. Remove this
+    # line once the job passes, so that a new error fails the build.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck
+        run: shellcheck --severity=error install.sh self-test.sh hooks/*.sh scripts/*.sh
