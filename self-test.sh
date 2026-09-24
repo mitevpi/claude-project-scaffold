@@ -897,6 +897,60 @@ else
   bad "land: an unknown branch was accepted"
 fi
 
+# L8: a -C with no value is a usage error, not an endless loop. macOS has no
+# timeout command, so the test polls a background run instead.
+"$LAND" t8 dev -C >/dev/null 2>&1 &
+land_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  kill -0 "$land_pid" 2>/dev/null || break
+  sleep 0.5
+done
+if kill -0 "$land_pid" 2>/dev/null; then
+  kill "$land_pid"
+  bad "land: a -C with no value hangs"
+else
+  wait "$land_pid"; code=$?
+  [ "$code" -eq 2 ] && ok "land: a -C with no value is a usage error" \
+    || bad "land: a -C with no value exited $code, not 2"
+fi
+
+# L9: run from inside the worktree it removes, with the base checked out
+# nowhere. The branch is still deleted, and the report matches the result.
+r="$land_tmp/l9"; new_repo "$r"
+git -C "$r" switch -q main
+git -C "$r" worktree add -q .worktrees/t9 -b t9 dev
+commit_in "$r/.worktrees/t9" a.txt a
+land_out=$(cd "$r/.worktrees/t9" && "$LAND" t9 dev 2>&1)
+if [ -z "$(sha "$r" t9)" ] && git -C "$r" cat-file -e dev:a.txt 2>/dev/null; then
+  ok "land: a run from inside the removed worktree still deletes the branch"
+else
+  case "$land_out" in
+    *"deleted the branch"*) bad "land: reported a deleted branch that still exists" ;;
+    *) bad "land: a run from inside the removed worktree did not finish the landing" ;;
+  esac
+fi
+
+# L10: --rebase-only rebases the branch onto the base and stops, so that the
+# orchestrator can test the rebased branch before it lands.
+r="$land_tmp/l10"; new_repo "$r"
+git -C "$r" worktree add -q .worktrees/t10 -b t10 dev
+commit_in "$r/.worktrees/t10" a.txt a
+commit_in "$r" b.txt b
+base_before=$(sha "$r" dev)
+if "$LAND" --rebase-only t10 dev -C "$r" >/dev/null 2>&1 \
+   && git -C "$r" merge-base --is-ancestor dev t10 \
+   && [ "$(sha "$r" dev)" = "$base_before" ] && [ -f "$r/.worktrees/t10/b.txt" ]; then
+  ok "land: --rebase-only rebases the branch and leaves the base and worktree alone"
+else
+  bad "land: --rebase-only did not rebase the branch alone"
+fi
+if "$LAND" t10 dev -C "$r" >/dev/null 2>&1 && [ "$(sha "$r" dev)" != "$base_before" ] \
+   && [ ! -d "$r/.worktrees/t10" ]; then
+  ok "land: a branch rebased with --rebase-only then lands"
+else
+  bad "land: a branch rebased with --rebase-only did not land"
+fi
+
 rm -rf "$land_tmp"
 echo
 
@@ -920,6 +974,18 @@ fi
 [ -z "$(git -C "$pkg_tmp" status --porcelain)" ] \
   && ok "review-package leaves git status clean, even without a .gitignore entry" \
   || bad "review-package left the package visible to git status"
+# The base moves on after the branch starts. The package must show what the
+# branch changed, not the base's new commits as reverse changes.
+git -C "$pkg_tmp" switch -qc feat
+echo feat > "$pkg_tmp/feat.txt"; git -C "$pkg_tmp" add feat.txt; git -C "$pkg_tmp" commit -qm "branch work"
+git -C "$pkg_tmp" switch -q main
+echo moved > "$pkg_tmp/moved.txt"; git -C "$pkg_tmp" add moved.txt; git -C "$pkg_tmp" commit -qm "base moved on"
+pkg_path=$(cd "$pkg_tmp" && "$PACKAGE" main feat 2>/dev/null)
+if [ -f "$pkg_path" ] && grep -q 'feat.txt' "$pkg_path" && ! grep -q 'moved.txt' "$pkg_path"; then
+  ok "review-package diffs from the merge base when the base has moved on"
+else
+  bad "review-package showed the base's new commits in the branch diff"
+fi
 if ! (cd "$pkg_tmp" && "$PACKAGE" no-such-ref HEAD >/dev/null 2>&1); then
   ok "review-package refuses an unknown revision"
 else

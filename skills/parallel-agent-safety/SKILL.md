@@ -141,8 +141,9 @@ For each branch:
 
 1. Read the full diff. You own this review. Do not delegate it to the agent that wrote
    the code.
-2. Run the full test suite and the lint and typecheck commands on the branch, rebased
-   onto the current base branch.
+2. Rebase the branch onto the current base branch with
+   `.claude/scripts/land-branch.sh --rebase-only <branch> <base>`. Then run the full
+   test suite and the lint and typecheck commands on the rebased branch.
 3. Land it with `.claude/scripts/land-branch.sh <branch> <base>`. The script rebases,
    fast-forwards the base, removes the worktree, and then deletes the branch. That
    order matters: git refuses to delete a branch that a worktree still has checked
