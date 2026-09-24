@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check-claude-md.sh — confirm that this project's CLAUDE.md setup is complete.
+# check-claude-md.sh: confirm that this project's CLAUDE.md setup is complete.
 #
 # Run it after you fill in CLAUDE.md, and again whenever you edit it.
 #

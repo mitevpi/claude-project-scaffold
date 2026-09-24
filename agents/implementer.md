@@ -29,7 +29,9 @@ You may do exactly three things with git.
 
 Never bypass a hook. `--no-verify` and `-n` are blocked, and so are `-a` and `--amend`.
 
-Everything else belongs to the orchestrator: `push`, `checkout`, `switch`, `branch`, `merge`, `rebase`, `reset`, `restore`, `stash`, `clean`, `tag`, and `worktree`. Report to the orchestrator when your work needs one of those. Do not attempt it.
+Everything else belongs to the orchestrator: `push`, `checkout`, `switch`, `branch`, `merge`, `rebase`, `reset`, `restore`, `stash`, `clean`, `tag`, `worktree`, and `.claude/scripts/land-branch.sh`. Report to the orchestrator when your work needs one of those. Do not attempt it.
+
+Never change `.claude/settings.json`, `.claude/hooks/`, `.claude/scripts/`, or `.claude/agents/`. They enforce the rules on you. The hook blocks a shell write to them.
 
 Report every commit you made with its short SHA and subject.
 
