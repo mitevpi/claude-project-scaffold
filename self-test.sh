@@ -28,6 +28,10 @@ HOOK="$ROOT/hooks/block-subagent-git.sh"
 pass=0
 fail=0
 
+# The tests create commits, so they need a git identity even on a bare CI
+# runner, and they must not depend on the identity of the person running them.
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+
 ok()   { printf '  ok    %s\n' "$1"; pass=$((pass + 1)); }
 bad()  { printf '  FAIL  %s\n' "$1"; fail=$((fail + 1)); }
 
@@ -104,6 +108,34 @@ setting() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(e
 [ "$(setting 'd["attribution"]["commit"] == "" and d["attribution"]["pr"] == ""')" = "True" ] \
   && ok "settings.json hides the commit and pull-request attribution" \
   || bad "settings.json does not hide attribution"
+
+# The Read deny rules must cover real secret files at any depth, and must not
+# cover .env.example, which the manual tells the agent to read. The matcher
+# below approximates Claude Code's gitignore-style patterns: "**/" matches any
+# directory prefix, and a pattern without it matches at the repository root.
+env_report=$(python3 - "$ROOT/settings.json" <<'PY'
+import fnmatch, json, sys
+deny = [r[5:-1] for r in json.load(open(sys.argv[1]))["permissions"]["deny"] if r.startswith("Read(")]
+def denied(path):
+    for pat in deny:
+        if pat.startswith("**/"):
+            rest = pat[3:]
+            parts = path.split("/")
+            if any(fnmatch.fnmatchcase("/".join(parts[i:]), rest) for i in range(len(parts))):
+                return True
+        elif fnmatch.fnmatchcase(path, pat):
+            return True
+    return False
+must = [".env", ".env.local", ".env.production", "api/.env", "api/.env.local",
+        "certs/server.pem", "certs/server.key", "id_rsa", "config/credentials.json"]
+must_not = [".env.example", "api/.env.example", ".env.sample", "src/env.ts"]
+wrong = [p for p in must if not denied(p)] + ["(readable) " + p for p in must_not if denied(p)]
+print(" ".join(wrong))
+PY
+)
+[ -z "$env_report" ] \
+  && ok "the Read deny rules cover secret files at any depth and spare .env.example" \
+  || bad "the Read deny rules are wrong for: $env_report"
 echo
 
 # --- 3. The subagent git hook ----------------------------------------------
@@ -250,11 +282,30 @@ if [ -x "$ROOT/install.sh" ]; then
   echo "End-to-end install"
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
+
+  # install.sh installs the scaffold's committed HEAD, never its working
+  # tree. So the tests run against a committed snapshot of this working tree:
+  # every tracked file and every untracked file that is not ignored.
+  SNAP="$tmp/scaffold"
+  mkdir -p "$SNAP"
+  (cd "$ROOT" && git ls-files -z --cached --others --exclude-standard) \
+    | while IFS= read -r -d '' f; do
+        [ -e "$ROOT/$f" ] || continue
+        mkdir -p "$SNAP/$(dirname "$f")"
+        cp -p "$ROOT/$f" "$SNAP/$f"
+      done
+  git -C "$SNAP" init -q -b main
+  git -C "$SNAP" add -A
+  git -C "$SNAP" commit -qm snapshot
+  # A stray local file, such as a .DS_Store, must never reach a target.
+  echo stray > "$SNAP/skills/.DS_Store"
+  echo scratch > "$SNAP/agents/scratch-notes.md"
+
   target="$tmp/target"
   mkdir -p "$target"
   git -C "$target" init -q -b main 2>/dev/null || git -C "$target" init -q
 
-  if "$ROOT/install.sh" "$target" >/dev/null 2>&1; then
+  if "$SNAP/install.sh" "$target" >/dev/null 2>&1; then
     ok "install.sh completed"
   else
     bad "install.sh failed"
@@ -275,11 +326,15 @@ if [ -x "$ROOT/install.sh" ]; then
     [ -e "$target/$path" ] && ok "installed $path" || bad "install.sh did not create $path"
   done
 
-  for entry in ".worktrees/" ".superpowers/"; do
-    grep -qF "$entry" "$target/.gitignore" 2>/dev/null \
-      && ok ".gitignore covers $entry" \
-      || bad ".gitignore does not cover $entry"
+  # git decides what is ignored, so ask git rather than grep the file.
+  for probe in ".worktrees/x/f" ".claude/worktrees/x/f" ".superpowers/sdd/f"; do
+    git -C "$target" check-ignore -q "$probe" \
+      && ok "git ignores $probe after install" \
+      || bad "git does not ignore $probe after install"
   done
+  git -C "$target" check-ignore -q "src/worktrees/f" \
+    && bad "the worktree entries also ignore src/worktrees/, a normal source directory" \
+    || ok "the worktree entries are anchored at the repository root"
 
   # A fresh install still holds its placeholders, so the check script must fail.
   if "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1; then
@@ -326,6 +381,17 @@ PY
     ok "check-claude-md.sh fails when the git hook is not registered"
   fi
   cp "$tmp/settings.saved" "$target/.claude/settings.json"
+  # A registered command with a wrong path exits 127, and Claude Code treats
+  # that as a non-blocking error: the hook fails open with no sign of it.
+  settings_edit "$target/.claude/settings.json" '
+h = d["hooks"]["PreToolUse"][0]["hooks"][0]
+h["command"] = h["command"].replace(".claude/hooks/", ".claude/hook/")'
+  if "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1; then
+    bad "check-claude-md.sh passed with a hook command that points at a missing file"
+  else
+    ok "check-claude-md.sh runs the registered hook command and catches a broken path"
+  fi
+  cp "$tmp/settings.saved" "$target/.claude/settings.json"
   settings_edit "$target/.claude/settings.json" 'd["permissions"]["deny"].remove("Bash(git reset --hard:*)")'
   if "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1; then
     bad "check-claude-md.sh passed with a required deny rule missing"
@@ -333,6 +399,19 @@ PY
     ok "check-claude-md.sh fails when a required deny rule is missing"
   fi
   cp "$tmp/settings.saved" "$target/.claude/settings.json"
+
+  # The check must ask git, not grep: a commented-out entry is no entry, and
+  # an equivalent pattern is a valid one.
+  cp "$target/.gitignore" "$tmp/gitignore.saved"
+  printf '# .worktrees/\n.claude/worktrees/\n.superpowers/\n' > "$target/.gitignore"
+  "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1 \
+    && bad "check-claude-md.sh accepted a commented-out .worktrees/ entry" \
+    || ok "check-claude-md.sh rejects a commented-out .worktrees/ entry"
+  printf '/.worktrees\n/.claude/worktrees\n.superpowers\n' > "$target/.gitignore"
+  "$target/.claude/scripts/check-claude-md.sh" "$target" >/dev/null 2>&1 \
+    && ok "check-claude-md.sh accepts equivalent .gitignore patterns" \
+    || bad "check-claude-md.sh rejected equivalent .gitignore patterns"
+  cp "$tmp/gitignore.saved" "$target/.gitignore"
 
   # A personal skill with the same name shadows the project copy, because
   # Claude Code ranks personal skills above project skills. The check warns.
@@ -362,7 +441,7 @@ PY
   git -C "$existing" add -A
   git -C "$existing" -c user.name=t -c user.email=t@t commit -qm init
 
-  if "$ROOT/install.sh" "$existing" >/dev/null 2>&1; then
+  if "$SNAP/install.sh" "$existing" >/dev/null 2>&1; then
     ok "install.sh completed on an existing project"
   else
     bad "install.sh failed on an existing project"
@@ -396,7 +475,7 @@ PY
   # A second run must not duplicate anything.
   git -C "$existing" add -A
   git -C "$existing" -c user.name=t -c user.email=t@t commit -qm install
-  "$ROOT/install.sh" "$existing" >/dev/null 2>&1
+  "$SNAP/install.sh" "$existing" >/dev/null 2>&1
   dupes=$(python3 - "$existing/.claude/settings.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -412,10 +491,22 @@ PY
     bad "a second install duplicated entries [dupes=$dupes gitignore-blocks=$blocks]"
   fi
 
+  # An older install already has the marker block but lacks a newer entry.
+  # A reinstall must add the entry anyway.
+  grep -v 'claude/worktrees' "$existing/.gitignore" > "$tmp/gi" && cp "$tmp/gi" "$existing/.gitignore"
+  git -C "$existing" add .gitignore
+  git -C "$existing" -c user.name=t -c user.email=t@t commit -qm "older gitignore"
+  "$SNAP/install.sh" "$existing" >/dev/null 2>&1
+  git -C "$existing" check-ignore -q ".claude/worktrees/x/f" \
+    && ok "a reinstall adds a missing .gitignore entry to an existing block" \
+    || bad "a reinstall did not add the missing .claude/worktrees/ entry"
+  git -C "$existing" add .gitignore
+  git -C "$existing" -c user.name=t -c user.email=t@t commit -qm "reinstall" >/dev/null 2>&1
+
   # The installer must refuse a target it cannot cleanly undo.
   echo "uncommitted" > "$existing/wip.txt"
   cp "$existing/.claude/settings.json" "$tmp/settings.before"
-  if ! "$ROOT/install.sh" --force "$existing" >/dev/null 2>&1 \
+  if ! "$SNAP/install.sh" --force "$existing" >/dev/null 2>&1 \
      && cmp -s "$existing/.claude/settings.json" "$tmp/settings.before" \
      && [ "$(head -1 "$existing/CLAUDE.md")" = "# Existing manual" ]; then
     ok "install.sh refuses a target with uncommitted changes"
@@ -425,12 +516,66 @@ PY
   rm -f "$existing/wip.txt"
 
   mkdir -p "$tmp/not-a-repo"
-  if ! "$ROOT/install.sh" "$tmp/not-a-repo" >/dev/null 2>&1 \
+  if ! "$SNAP/install.sh" "$tmp/not-a-repo" >/dev/null 2>&1 \
      && [ ! -e "$tmp/not-a-repo/CLAUDE.md" ]; then
     ok "install.sh refuses a directory that is not a git repository"
   else
     bad "install.sh installed into a directory that is not a git repository"
   fi
+  echo
+
+  # --- Versions and updates ---------------------------------------------------
+  echo "Install versions and --update"
+  [ ! -e "$target/.claude/skills/.DS_Store" ] && [ ! -e "$target/.claude/agents/scratch-notes.md" ] \
+    && ok "install.sh installs committed files only, never stray local ones" \
+    || bad "install.sh copied an uncommitted file from the scaffold"
+  snap_a=$(git -C "$SNAP" rev-parse HEAD)
+  grep -q "^commit $snap_a\$" "$target/.claude/scaffold-version" 2>/dev/null \
+    && ok "install.sh records the scaffold commit it installed" \
+    || bad "install.sh did not record the scaffold commit in .claude/scaffold-version"
+
+  up="$tmp/update-target"
+  mkdir -p "$up"; git -C "$up" init -q -b main
+  "$SNAP/install.sh" "$up" >/dev/null 2>&1
+  echo "# customised by this project" >> "$up/.claude/agents/implementer.md"
+  git -C "$up" add -A; git -C "$up" commit -qm "install and customise"
+  manual_before=$(cat "$up/CLAUDE.md")
+
+  # The scaffold moves on: a hook fix, an agent change, a new file, and a
+  # manual change.
+  echo "# upstream hook fix" >> "$SNAP/hooks/block-subagent-git.sh"
+  echo "# upstream agent change" >> "$SNAP/agents/implementer.md"
+  mkdir -p "$SNAP/skills/new-skill"; echo "new" > "$SNAP/skills/new-skill/SKILL.md"
+  echo "<!-- upstream manual change -->" >> "$SNAP/CLAUDE-template.md"
+  git -C "$SNAP" add hooks agents/implementer.md skills/new-skill CLAUDE-template.md
+  git -C "$SNAP" commit -qm "upstream changes"
+  snap_b=$(git -C "$SNAP" rev-parse HEAD)
+
+  update_out=$("$SNAP/install.sh" --update "$up" 2>&1); update_code=$?
+  [ "$update_code" -eq 0 ] && ok "install.sh --update completed" || bad "install.sh --update failed [exit $update_code]"
+  tail -1 "$up/.claude/hooks/block-subagent-git.sh" | grep -q "upstream hook fix" \
+    && ok "--update refreshes a file the project did not change" \
+    || bad "--update did not refresh an unchanged hook"
+  tail -1 "$up/.claude/agents/implementer.md" | grep -q "customised by this project" \
+    && ok "--update keeps a file the project customised" \
+    || bad "--update overwrote a customised file"
+  case "$update_out" in
+    *implementer.md*) ok "--update names the customised file it skipped" ;;
+    *) bad "--update did not report the customised file" ;;
+  esac
+  [ -f "$up/.claude/skills/new-skill/SKILL.md" ] \
+    && ok "--update adds a file that is new upstream" \
+    || bad "--update did not add a new upstream file"
+  [ "$(cat "$up/CLAUDE.md")" = "$manual_before" ] \
+    && ok "--update never touches CLAUDE.md" \
+    || bad "--update changed CLAUDE.md"
+  case "$update_out" in
+    *CLAUDE-template.md*) ok "--update reports that the manual template changed upstream" ;;
+    *) bad "--update did not report the manual template change" ;;
+  esac
+  grep -q "^commit $snap_b\$" "$up/.claude/scaffold-version" \
+    && ok "--update records the new scaffold commit" \
+    || bad "--update did not record the new scaffold commit"
   echo
 fi
 
@@ -469,8 +614,6 @@ echo
 # worktree. Every refusal must leave the work exactly where it was.
 LAND="$ROOT/scripts/land-branch.sh"
 echo "Landing a branch"
-# A rebase writes commits, so it needs an identity even on a bare CI runner.
-export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
 # new_repo DIR: a repository with main and a base branch named dev, which is
 # checked out in DIR itself.

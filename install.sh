@@ -5,6 +5,17 @@
 #   ./install.sh <target-repo>            install the FULL CLAUDE.md variant
 #   ./install.sh --light <target-repo>    install the light CLAUDE.md variant
 #   ./install.sh --force <target-repo>    overwrite files that already exist
+#   ./install.sh --update <target-repo>   bring an earlier install up to date
+#
+# It installs the scaffold's committed HEAD, never its working tree, so a
+# stray local file such as a .DS_Store never reaches a target. It records the
+# commit in <target>/.claude/scaffold-version.
+#
+# --update reads that record. For each file under .claude/agents, hooks,
+# scripts, and skills, it adds a file that is new, refreshes a file that the
+# project never changed, and keeps a file that the project customised, and
+# names it. It never touches CLAUDE.md or README.md. It tells you when their
+# templates changed upstream, and how to see the change.
 #
 # The target must be a git repository with no uncommitted changes. That makes
 # the install one reviewable diff: "git diff" shows it, and "git restore ."
@@ -33,16 +44,19 @@ set -euo pipefail
 SCAFFOLD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 variant="full"
+variant_set=0
 force=0
+update=0
 target=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --light) variant="light"; shift ;;
-    --full)  variant="full";  shift ;;
-    --force) force=1; shift ;;
+    --light)  variant="light"; variant_set=1; shift ;;
+    --full)   variant="full";  variant_set=1; shift ;;
+    --force)  force=1; shift ;;
+    --update) update=1; shift ;;
     -h|--help)
-      sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+      awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
       exit 0
       ;;
     -*)
@@ -61,7 +75,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$target" ]; then
-  echo "usage: ./install.sh [--light] [--force] <target-repo>" >&2
+  echo "usage: ./install.sh [--light] [--force | --update] <target-repo>" >&2
   exit 2
 fi
 
@@ -94,8 +108,56 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 2
 fi
 
+if [ "$force" -eq 1 ] && [ "$update" -eq 1 ]; then
+  echo "--force and --update do not mix. --update already refreshes every file" >&2
+  echo "that the project did not customise." >&2
+  exit 2
+fi
+
+# --- Source: the scaffold's committed HEAD --------------------------------------
+if git -C "$SCAFFOLD" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  new_commit=$(git -C "$SCAFFOLD" rev-parse HEAD)
+  SRC=$(mktemp -d)
+  trap 'rm -rf "$SRC"' EXIT
+  git -C "$SCAFFOLD" archive HEAD | tar -x -C "$SRC"
+  if [ -n "$(git -C "$SCAFFOLD" status --porcelain)" ]; then
+    echo "note: the scaffold has uncommitted changes. They are not installed."
+    echo "      Installing commit ${new_commit:0:10}."
+    echo
+  fi
+else
+  new_commit="unversioned"
+  SRC=$SCAFFOLD
+  echo "note: the scaffold is not a git checkout. Installing its files as they are,"
+  echo "      and --update will treat every changed file as customised."
+  echo
+fi
+
+VERSION_FILE="$TARGET/.claude/scaffold-version"
+old_commit=""
+if [ "$update" -eq 1 ]; then
+  if [ ! -f "$VERSION_FILE" ]; then
+    echo "$TARGET has no .claude/scaffold-version, so there is no install to update." >&2
+    echo "Run install.sh without --update." >&2
+    exit 2
+  fi
+  old_commit=$(awk '$1 == "commit" { print $2 }' "$VERSION_FILE")
+  if [ "$variant_set" -eq 0 ]; then
+    variant=$(awk '$1 == "variant" { print $2 }' "$VERSION_FILE")
+    [ -n "$variant" ] || variant="full"
+  fi
+  if ! git -C "$SCAFFOLD" cat-file -e "$old_commit^{commit}" 2>/dev/null; then
+    echo "note: this scaffold checkout does not hold the installed commit $old_commit."
+    echo "      Every file that differs is treated as customised and kept."
+    echo
+    old_commit=""
+  fi
+fi
+
 copied=0
 skipped=0
+refreshed=0
+customised=""
 
 # copy_file SOURCE DEST
 copy_file() {
@@ -124,6 +186,27 @@ copy_tree() {
   done < <(find "$src_dir" -type f -print0)
 }
 
+# update_file SOURCE DEST SCAFFOLD_PATH
+# For --update. Adds a new file, refreshes a file that still matches the
+# installed version, and keeps a file that the project changed.
+update_file() {
+  src="$1"
+  dest="$2"
+  rel="$3"
+  if [ ! -e "$dest" ]; then
+    copy_file "$src" "$dest"
+  elif cmp -s "$src" "$dest"; then
+    return 0
+  elif [ -n "$old_commit" ] && git -C "$SCAFFOLD" show "$old_commit:$rel" 2>/dev/null | cmp -s - "$dest"; then
+    cp "$src" "$dest"
+    printf '  update %s\n' "${dest#"$TARGET"/}"
+    refreshed=$((refreshed + 1))
+  else
+    printf '  keep  %s (customised in this project)\n' "${dest#"$TARGET"/}"
+    customised="$customised ${dest#"$TARGET"/}"
+  fi
+}
+
 # merge_settings SOURCE DEST
 # Adds every scaffold permission rule and hook that DEST lacks. Keeps
 # everything DEST already has, in its order. Writes nothing when nothing is
@@ -135,7 +218,7 @@ merge_settings() {
     copy_file "$src" "$dest"
     return 0
   fi
-  if ! result=$(python3 "$SCAFFOLD/dev/merge-settings.py" "$src" "$dest"); then
+  if ! result=$(python3 "$SRC/dev/merge-settings.py" "$src" "$dest"); then
     echo "  FAIL  .claude/settings.json could not be merged: $result" >&2
     exit 1
   fi
@@ -146,25 +229,43 @@ merge_settings() {
   fi
 }
 
-echo "Installing the $variant variant into $TARGET"
-echo
-
 case "$variant" in
-  full)  manual="$SCAFFOLD/CLAUDE-template.md" ;;
-  light) manual="$SCAFFOLD/CLAUDE-light.md" ;;
+  full)  manual_name="CLAUDE-template.md" ;;
+  light) manual_name="CLAUDE-light.md" ;;
+  *) echo "unknown variant in $VERSION_FILE: $variant" >&2; exit 2 ;;
 esac
-
+manual="$SRC/$manual_name"
 [ -f "$manual" ] || { echo "missing: $manual" >&2; exit 1; }
 
-copy_file "$manual" "$TARGET/CLAUDE.md"
-copy_file "$SCAFFOLD/README-template.md" "$TARGET/README.md"
-merge_settings "$SCAFFOLD/settings.json" "$TARGET/.claude/settings.json"
+if [ "$update" -eq 1 ]; then
+  echo "Updating the $variant install in $TARGET to scaffold commit ${new_commit:0:10}"
+  echo
+  merge_settings "$SRC/settings.json" "$TARGET/.claude/settings.json"
+  for dir in agents hooks scripts skills; do
+    [ -d "$SRC/$dir" ] || continue
+    while IFS= read -r -d '' file; do
+      rel="${file#"$SRC"/}"
+      update_file "$file" "$TARGET/.claude/$rel" "$rel"
+    done < <(find "$SRC/$dir" -type f -print0)
+  done
+  # docs/ is project content once installed. Add only what is missing.
+  copy_tree "$SRC/docs" "$TARGET/docs" >/dev/null
+else
+  echo "Installing the $variant variant into $TARGET"
+  echo
+  copy_file "$manual" "$TARGET/CLAUDE.md"
+  copy_file "$SRC/README-template.md" "$TARGET/README.md"
+  merge_settings "$SRC/settings.json" "$TARGET/.claude/settings.json"
+  for dir in agents hooks scripts skills; do
+    copy_tree "$SRC/$dir" "$TARGET/.claude/$dir"
+  done
+  copy_tree "$SRC/docs" "$TARGET/docs"
+fi
 
-for dir in agents hooks scripts skills; do
-  copy_tree "$SCAFFOLD/$dir" "$TARGET/.claude/$dir"
-done
-
-copy_tree "$SCAFFOLD/docs" "$TARGET/docs"
+# The version record is what makes a later --update possible.
+mkdir -p "$TARGET/.claude"
+printf '# Written by claude-scaffold install.sh. install.sh --update reads it.\ncommit %s\nvariant %s\n' \
+  "$new_commit" "$variant" > "$VERSION_FILE"
 
 # The hooks and scripts must stay executable through the copy.
 find "$TARGET/.claude/hooks" "$TARGET/.claude/scripts" -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
@@ -183,10 +284,14 @@ else
   [ -f "$GITIGNORE" ] && printf '\n' >> "$GITIGNORE"
   cat >> "$GITIGNORE" <<'IGNORE'
 # --- Claude Code and Superpowers ---
-# Isolated workspaces created by superpowers:using-git-worktrees. An unignored
-# worktree directory commits a whole second checkout into the repository.
-.worktrees/
-worktrees/
+# Isolated workspaces: .worktrees/ and worktrees/ from
+# superpowers:using-git-worktrees, and .claude/worktrees/ from Claude Code's own
+# worktree option. An unignored worktree directory commits a whole second
+# checkout into the repository. The leading slash anchors each entry at the
+# repository root, so a source directory named worktrees/ stays tracked.
+/.worktrees/
+/worktrees/
+/.claude/worktrees/
 
 # The subagent-driven-development workspace: task briefs, implementer reports,
 # review packages, and the progress ledger. Scratch, not history.
@@ -194,7 +299,7 @@ worktrees/
 
 # Local, per-machine Claude Code settings. .claude/settings.json is shared and
 # tracked; this one is not.
-.claude/settings.local.json
+/.claude/settings.local.json
 
 # OS and editor noise
 .DS_Store
@@ -203,8 +308,51 @@ IGNORE
   echo "  edit  .gitignore (appended the Claude and Superpowers block)"
 fi
 
+# An older install has the block but may lack a newer entry. Ask git whether
+# each load-bearing path is ignored, and append the entry for any that is not.
+for pair in "/.worktrees/ .worktrees/probe" \
+            "/.claude/worktrees/ .claude/worktrees/probe" \
+            ".superpowers/ .superpowers/probe" \
+            "/.claude/settings.local.json .claude/settings.local.json"; do
+  entry=${pair%% *}
+  probe=${pair#* }
+  if ! git -C "$TARGET" check-ignore -q "$probe"; then
+    printf '%s\n' "$entry" >> "$GITIGNORE"
+    echo "  edit  .gitignore (added the missing entry $entry)"
+  fi
+done
+
 # --- Report ------------------------------------------------------------------
 echo
+if [ "$update" -eq 1 ]; then
+  echo "Added $copied file(s), refreshed $refreshed."
+  if [ -n "$customised" ]; then
+    echo
+    echo "Kept these customised files. Compare each one with the scaffold by hand:"
+    for f in $customised; do
+      rel=${f#.claude/}
+      if [ -n "$old_commit" ]; then
+        echo "  $f:  git -C $SCAFFOLD diff ${old_commit:0:10} ${new_commit:0:10} -- $rel"
+      else
+        echo "  $f:  diff $SCAFFOLD/$rel $TARGET/$f"
+      fi
+    done
+  fi
+  # The manual and the README are project documents after install. Report a
+  # template change, and never apply it.
+  if [ -n "$old_commit" ]; then
+    for tmpl in "$manual_name" README-template.md; do
+      if [ -n "$(git -C "$SCAFFOLD" diff --name-only "$old_commit" "$new_commit" -- "$tmpl")" ]; then
+        echo
+        echo "$tmpl changed upstream. Port what applies into this project by hand:"
+        echo "  git -C $SCAFFOLD diff ${old_commit:0:10} ${new_commit:0:10} -- $tmpl"
+      fi
+    done
+  fi
+  echo
+  echo "Review the result with git diff, run .claude/scripts/check-claude-md.sh, and commit."
+  exit 0
+fi
 echo "Copied $copied file(s), skipped $skipped."
 echo
 cat <<NEXT

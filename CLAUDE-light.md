@@ -165,8 +165,9 @@ you are using it. Section 4 explains why this repo keeps a linear history.
 - **The base branch is `{{main}}`.** You own it. Commit to it directly for a small,
   finished, tested change. Cut a branch for anything larger.
 - **Cut one short-lived branch per plan or task from `{{main}}`.** Never reuse a branch
-  for unrelated work. You may create these branches and merge them back into `{{main}}`
-  without permission.
+  for unrelated work. You may create these branches without permission. Landing one asks
+  the owner first, because `land-branch.sh`, `git merge`, and `git rebase` are ask
+  rules in `.claude/settings.json`.
 - **Land a branch by rebase, not by a merge commit,** so that each diff stays linear and
   small. Run `.claude/scripts/land-branch.sh <branch> {{main}}`. It rebases the branch,
   fast-forwards `{{main}}`, removes the branch's worktree, and deletes the branch, from

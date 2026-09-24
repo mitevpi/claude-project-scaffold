@@ -166,8 +166,9 @@ you are using it. Section 4 explains why this repo keeps a linear history.
   Never delete `{{feature-dev}}` either. The owner promotes `{{feature-dev}}` to
   `{{main}}` by hand. Do not open or suggest a PR that targets `{{main}}`.
 - **Cut one short-lived branch per plan or task from `{{feature-dev}}`.** Never reuse a
-  branch for unrelated work. You may create these and merge them back into
-  `{{feature-dev}}` without permission. Every other branch operation needs permission.
+  branch for unrelated work. You may create these without permission. Landing one asks
+  the owner first, because `land-branch.sh`, `git merge`, and `git rebase` are ask
+  rules in `.claude/settings.json`. Every other branch operation needs permission.
 - **Land a branch by rebase, not by a merge commit,** so that each diff stays linear and
   small. Run `.claude/scripts/land-branch.sh <branch> {{feature-dev}}`. It rebases the branch,
   fast-forwards `{{feature-dev}}`, removes the branch's worktree, and deletes the branch, from

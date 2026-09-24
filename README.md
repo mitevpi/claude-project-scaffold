@@ -154,15 +154,38 @@ scaffold's rules and hooks into your `.claude/settings.json`, and appends the re
 Then merge the template's `CLAUDE.md` into yours by hand, section by section. The sections
 that repay the effort first are section 2 (commands) and the invariants list in section 1.
 
+### Updating an installed project
+
+The installer installs the scaffold's committed `HEAD`, never its working tree, and it
+records that commit in `.claude/scaffold-version`. When the scaffold improves, bring a
+project up to date from a clean tree:
+
+```bash
+./install.sh --update /path/to/your-repo
+```
+
+For each file under `.claude/agents/`, `hooks/`, `scripts/`, and `skills/`, it adds a file
+that is new, refreshes a file that the project never changed, and keeps a file that the
+project customised. It names every file it kept, with the `git diff` command that shows
+the upstream change. It merges new permission rules and hooks into `settings.json`. It
+never touches `CLAUDE.md` or `README.md`: when their templates changed, it prints the
+command that shows the change, and you port what applies.
+
 ### The `.gitignore` entries are load-bearing
 
-`install.sh` appends a block covering `.worktrees/` and `.superpowers/`. Both matter:
+`install.sh` appends a block that covers the agent workspaces. Each entry matters:
 
-- An unignored `.worktrees/` commits a whole second checkout into the repository.
-- An unignored `.superpowers/` commits the subagent-driven-development ledger, every task
-  brief, and every review package.
+- An unignored `.worktrees/`, `worktrees/`, or `.claude/worktrees/` commits a whole second
+  checkout into the repository. The first two come from `superpowers:using-git-worktrees`.
+  The third is where Claude Code's own worktree option puts them. The entries are anchored
+  at the repository root, so a source directory that happens to be named `worktrees/` stays
+  tracked.
+- An unignored `.superpowers/` commits brainstorming mockups. The subagent-driven-development
+  ledger and `review-package.sh` each ignore their own directory, but the brainstorming
+  companion does not.
 
-The check script fails if either is missing.
+The check script asks `git check-ignore` about each path, so a commented-out entry fails
+and an equivalent pattern passes. A reinstall adds any entry that an older block lacks.
 
 ## FULL or light
 
@@ -184,7 +207,7 @@ link behind.
 The `superpowers` plugin supplies the process: brainstorm, write a spec, write a plan,
 execute it task by task with a fresh subagent, review each task, review the branch. This
 scaffold is built to sit under that process rather than beside it. The alignment below was
-checked against **Superpowers 6.3.0**.
+checked against **Superpowers 6.4.1**.
 
 ### What the scaffold adopts unchanged
 
@@ -303,7 +326,12 @@ Stated plainly, because a scaffold that oversells its guarantees is worse than n
 - **The permission rules are not a sandbox.** They pattern-match command strings. A
   command can be spelled another way, moved into a script, or run through an interpreter.
   Treat them as a guard against a slip, never as containment. Run genuinely untrusted work
-  in a sandbox or a container.
+  in a sandbox or a container. Claude Code's own `sandbox` setting limits where Bash may
+  write, and is worth turning on per project.
+- **The `Read` deny rules cover the Read tool only.** They keep `.env`, `.env.local`,
+  `.env.production`, keys, and credentials out of a `Read` call at any depth, and they
+  leave `.env.example` readable, because the manual tells the agent to read it. They do not
+  stop `cat .env` through Bash.
 - **The hook fails closed for a subagent git command, and open for everything else.** If
   it cannot read a subagent command that mentions git, or python3 is missing, it blocks.
   For the main session, and for a subagent command with no git in it, it allows. A hook
@@ -331,7 +359,7 @@ Stated plainly, because a scaffold that oversells its guarantees is worse than n
 - **The line budget is a real constraint.** The manual is re-read every session. Anything
   you add is paid for in every turn, for the life of the repository.
 - **The alignment can drift.** Everything in the Superpowers section above was verified
-  against version 6.3.0. A plugin release can move a default path or change a skill's
+  against version 6.4.1. A plugin release can move a default path or change a skill's
   process. See the next section.
 - **The writing rules are opinionated.** The ASD-STE100 rules make output terse and
   literal. Some people read that as curt. Delete section 9 and the `ste-writing` skill if
@@ -348,11 +376,11 @@ This repository tests itself:
 ./self-test.sh
 ```
 
-It checks that every shell script parses, that `settings.json` is valid JSON, that the git
-hook allows and blocks the right commands across a 46-case matrix, and that `install.sh`
-produces a target repository the check script accepts. The install test is end to end: it
-installs into a temporary repository, fills the placeholders, and runs the check script
-against the result.
+It checks that every shell script parses and that `settings.json` holds the rules it
+must. It runs the git hook against a matrix of commands, including each of the hiding
+places listed above. It lands branches in scratch repositories and proves that each
+refusal loses nothing. It installs into a new and an existing project, reinstalls, and
+updates, each end to end, and it runs the check script against every result.
 
 In a target repository, run the check script instead:
 
@@ -360,10 +388,15 @@ In a target repository, run the check script instead:
 .claude/scripts/check-claude-md.sh
 ```
 
-It verifies that no placeholder or usage block remains, that every companion file the
-manual refers to exists, that the hook is executable and enforcing the intended policy,
-that `.gitignore` covers the agent workspaces, and that the manual is inside its line
-budget.
+It verifies:
+
+- No placeholder or usage block remains.
+- Every companion file the manual refers to exists.
+- `settings.json` registers both hooks and holds the required deny rules.
+- The registered hook command actually runs and blocks.
+- `.gitignore` covers the agent workspaces.
+- No personal skill shadows a project skill.
+- The manual is inside its line budget.
 
 ## Keeping up with plugin changes
 
@@ -375,9 +408,17 @@ scaffold depends on:
 2. **The worktree directory** that `superpowers:using-git-worktrees` looks for.
 3. **Whether the subagent-driven-development implementer still commits its own work.** If
    that ever changes, the hook's allowance for `add` and `commit` can tighten again.
+4. **The git commands that subagent prompts run.** A new read command in an implementer
+   or reviewer template needs a place on the hook's allowlist. A reviewer template that
+   runs git itself needs `review-package.sh`.
+5. **Where the SDD ledger lives.** It resolves to `.superpowers/sdd/` under the top of the
+   current worktree, so removing that worktree deletes it. `land-branch.sh` warns when it
+   removes one.
 
-Each one is a single line in a skill file. The plugin installs under
-`~/.claude/plugins/cache/`, so `grep` finds them quickly.
+Each one is a line or two in a skill file. The plugin installs under
+`~/.claude/plugins/cache/`, so `grep` finds them quickly. Install the plugin from one
+marketplace only. Two installs, such as `claude-plugins-official` and
+`superpowers-marketplace`, can leave an older version registered beside the current one.
 
 ## Contributing
 

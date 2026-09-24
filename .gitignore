@@ -2,10 +2,14 @@
 # This scaffold is itself a Claude Code project, so it ignores the same paths it
 # teaches a target repository to ignore. install.sh appends this block there.
 
-# Isolated workspaces created by superpowers:using-git-worktrees. An unignored
-# worktree directory commits a whole second checkout into the repository.
-.worktrees/
-worktrees/
+# Isolated workspaces: .worktrees/ and worktrees/ from
+# superpowers:using-git-worktrees, and .claude/worktrees/ from Claude Code's own
+# worktree option. An unignored worktree directory commits a whole second
+# checkout into the repository. The leading slash anchors each entry at the
+# repository root.
+/.worktrees/
+/worktrees/
+/.claude/worktrees/
 
 # The subagent-driven-development workspace: task briefs, implementer reports,
 # review packages, and the progress ledger. Scratch, not history.

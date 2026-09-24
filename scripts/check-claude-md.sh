@@ -128,6 +128,11 @@ def registered(event, script):
                 return group.get("matcher", "")
     return None
 
+for group in d.get("hooks", {}).get("PreToolUse", []):
+    for h in group.get("hooks", []):
+        if "block-subagent-git.sh" in h.get("command", ""):
+            print("wire " + h["command"])
+
 m = registered("PreToolUse", "block-subagent-git.sh")
 if m is None:
     print("bad settings.json does not register block-subagent-git.sh under PreToolUse. The hook never runs.")
@@ -165,6 +170,7 @@ PY
       case "$line" in
         ok\ *)  ok "${line#ok }" ;;
         bad\ *) bad "${line#bad }" ;;
+        wire\ *) wired_command=${line#wire } ;;
       esac
     done <<EOF
 $settings_report
@@ -220,23 +226,39 @@ PY
   hook_case "blocks a hook bypass"                     2 sub 'git commit --no-verify -m "x"'
   hook_case "blocks a subagent push"                   2 sub 'git push origin main'
   hook_case "never limits the main session"            0 main 'git reset --hard HEAD~1'
+
+  # Run the hook exactly as settings.json registers it. A wrong path in the
+  # command exits 127, which Claude Code treats as a non-blocking error: the
+  # hook would fail open with no sign of it.
+  if [ -n "${wired_command:-}" ]; then
+    printf '%s' '{"agent_id":"a1","tool_input":{"command":"git push origin main"}}' \
+      | CLAUDE_PROJECT_DIR="$ROOT" sh -c "$wired_command" >/dev/null 2>&1
+    wired_code=$?
+    if [ "$wired_code" -eq 2 ]; then
+      ok "hook: the command registered in settings.json runs and blocks"
+    else
+      bad "hook: the command registered in settings.json exits $wired_code, not 2. It fails open."
+    fi
+  fi
 fi
 
 # --- 8. .gitignore covers the agent workspaces ------------------------------
 # Both entries are load-bearing. An unignored .worktrees/ commits a whole
 # second checkout. An unignored .superpowers/ commits the SDD ledger and every
 # review package with it.
-gitignore="$ROOT/.gitignore"
-if [ -f "$gitignore" ]; then
-  for entry in ".worktrees/" ".superpowers/"; do
-    if grep -qF "$entry" "$gitignore"; then
-      ok ".gitignore covers $entry"
+# git decides what is ignored, so ask git. A grep passes on a commented-out
+# line and fails on an equivalent pattern.
+if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  for probe in ".worktrees/probe" ".claude/worktrees/probe" ".superpowers/probe"; do
+    dir=${probe%/probe}/
+    if git -C "$ROOT" check-ignore -q "$probe"; then
+      ok ".gitignore covers $dir"
     else
-      bad ".gitignore does not cover $entry. Superpowers writes there."
+      bad ".gitignore does not cover $dir. Superpowers or Claude Code writes there."
     fi
   done
 else
-  bad ".gitignore is missing. It must cover .worktrees/ and .superpowers/"
+  bad "$ROOT is not a git repository, so the .gitignore entries cannot be checked"
 fi
 
 # --- 9. No personal skill shadows a project skill -----------------------------
