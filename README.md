@@ -2,11 +2,13 @@
 
 A starting configuration for a repository worked on with [Claude Code](https://claude.com/claude-code)
 and the [`superpowers`](https://github.com/obra/superpowers) plugin. It gives a project
-an operating manual that an agent reads first, three subagent definitions, two skills, a
-permission ruleset, and a hook that limits what a subagent can do to git.
+an operating manual that an agent reads first, four subagent definitions, two skills, a
+permission ruleset, and hooks that limit what a subagent can do to git.
 
 The point is not to make an agent faster. The point is to make its output reviewable, and
-to keep one bad command from reaching the whole repository.
+to keep one bad command from reaching the whole repository. Parallel work gets faster the
+same way: each branch gets its own worktree and a mechanical check before it lands, so it
+costs less to review, not less to trust.
 
 ## Contents
 
@@ -70,22 +72,29 @@ agents/
   researcher.md               read-only. No shell. For exploration and fact-finding.
   reviewer.md                 read-only. No shell. For spec and quality review.
   implementer.md              writes inside one named scope. Runs tests. Commits.
+  wave-implementer.md         the same, in its own worktree, for a parallel wave
 hooks/
   block-subagent-git.sh       limits a subagent's git; blocks destructive git for all
-  session-start-git-context.sh  shows each new session the work already in its checkout
+  session-start-git-context.sh  shows each new session the work already in its checkout,
+                              and every file that two worktrees change
+  wave-implementer-stop.sh    sends a wave implementer back to commit its work
 scripts/
   check-claude-md.sh          verifies a filled-in install
-  land-branch.sh              lands a finished branch, and refuses rather than lose work
+  land-branch.sh              lands a finished branch after a check, and refuses rather
+                              than lose work
   review-package.sh           writes a commit range to a file for the shell-less reviewer
+  wave-status.sh              shows every worktree's work and every file that two change
 skills/
   parallel-agent-safety/      isolation policy for running agents concurrently
   ste-writing/                the ASD-STE100 Simplified Technical English rules
 docs/
   index.md, architecture.md   stubs, plus the directories Superpowers writes into
+.worktreeinclude           -> <target>/.worktreeinclude: local config to copy into worktrees
 ```
 
 Everything from `settings.json` down is the payload that `install.sh` copies into a target
-repository, under `.claude/`. Everything above it stays here.
+repository: under `.claude/`, except `docs/` and `.worktreeinclude`. Everything above it
+stays here.
 
 ## The idea: three layers of control
 
@@ -95,7 +104,7 @@ the time" is not a control when the failure mode is a destroyed working tree.
 So the scaffold states every rule three times, at three different strengths, and it says
 which layer is doing the work.
 
-1. **Mechanical.** `settings.json` deny rules and settings, and the two hooks. These
+1. **Mechanical.** `settings.json` deny rules and settings, and the three hooks. These
    run outside the model. `git reset --hard`, forced worktree removal, and `rm -rf` are
    denied, and the git hook blocks the destructive git commands again in the forms a deny
    rule cannot match, such as `git -C <path> reset --hard`. `git push` and `npm install`
@@ -238,9 +247,11 @@ checked against **Superpowers 6.4.1**.
   `docs/superpowers/plans/`. The stub tree creates both. Keeping the plugin's defaults
   means a plugin update never moves them, and no session spends instructions restating an
   override.
-- **The worktree policy.** Prefer the harness's native worktree tool. Fall back to
-  project-local `.worktrees/`, which `.gitignore` covers. The earlier version of this
-  scaffold used a sibling `../worktrees/` directory, which the plugin does not look for.
+- **The worktree policy.** Prefer the harness's native worktree tool. For a parallel
+  wave that is the `wave-implementer`, whose `isolation: worktree` field makes Claude Code
+  create its worktree. Fall back to project-local `.worktrees/`, which `.gitignore`
+  covers. The earlier version of this scaffold used a sibling `../worktrees/` directory,
+  which the plugin does not look for.
 - **Test-driven development, with no project exemption.** Write the test, watch it fail,
   then make it pass.
 - **The three-option menu at the end of a branch.** `finishing-a-development-branch`
@@ -314,6 +325,19 @@ division: **the Superpowers template is the brief, and the agent definition is t
 grant.** The model named at dispatch overrides the `model:` field in the agent file, so
 the plugin's model-selection guidance still applies.
 
+There are two implementers, because the two workflows need different checkouts.
+Subagent-driven development reviews each task as a commit range on the controller's own
+branch, so its `implementer` works in the controller's checkout. A parallel wave needs one
+checkout per writer, so its `wave-implementer` declares `isolation: worktree`. Claude
+Code then creates `.claude/worktrees/agent-<id>` on a branch `worktree-agent-<id>`, from
+the current `HEAD`, because `settings.json` sets `worktree.baseRef` to `"head"`. Without
+that setting, the worktree starts from the remote default branch.
+
+A plan runs in sequence. When two or more of its tasks share no file and no dependency,
+the `parallel-agent-safety` skill offers the owner a plan wave, with a short summary of
+the gain, the cost, and the residual risk. It never starts one without a yes, and it does
+not ask when any risk of overlap remains.
+
 One template needs a bridge. The SDD task reviewer reads a review package file that the
 plugin's own script writes. The `requesting-code-review` reviewer instead runs `git diff`
 itself, which a shell-less `reviewer` cannot do. `scripts/review-package.sh` writes the
@@ -380,6 +404,16 @@ Stated plainly, because a scaffold that oversells its guarantees is worse than n
   requires one session per checkout, and the session-start hook shows every new session
   the uncommitted work and the other worktrees it starts next to. Both are warnings, not
   locks. Start each parallel session in its own worktree.
+- **Worktree isolation reads commands, not their effects.** Claude Code blocks an edit, a
+  command, or a git redirect that an isolated agent aims at the main checkout. It does not
+  see a `cp` or a shell redirect that writes there. The `sandbox` setting closes that gap.
+- **Agent teams share one working directory.** Their teammates get no worktree, so the
+  manual keeps them away from write work. With teams turned on, a named Agent call starts
+  a teammate unless it passes isolation itself. The `wave-implementer` always does.
+- **A wave still needs its environment.** `.worktreeinclude` copies the listed local
+  config into each worktree, but not installed dependencies. `worktree.symlinkDirectories`
+  can share a directory such as `node_modules`, and then every worktree shares one copy.
+  A port, a database, or a cache is shared unless each brief names a separate one.
 - **Prompt injection defeats layer 3 entirely.** Content that an agent reads is data, not
   instruction, but a written rule cannot enforce that on its own. Never point an agent
   with write tools at untrusted content and then leave it unsupervised.
@@ -430,8 +464,10 @@ It verifies:
 - The hooks, the settings, and `land-branch.sh` exist, and so does every other companion
   file the manual still names. Delete a skill and its mentions together.
 - The attribution setting and the subagent spawn limit are still in force.
-- `settings.json` registers both hooks, holds the required deny rules, and asks before an
-  edit to the files that enforce them.
+- `settings.json` registers every hook, holds the required deny rules, and asks before an
+  edit to the files that enforce them. It warns when `worktree.baseRef` is not `"head"`,
+  and when no allow rule covers the full test command: a background agent waits at every
+  permission prompt.
 - The registered hook command actually runs and blocks.
 - `.gitignore` covers the agent workspaces: `.worktrees/`, `worktrees/`,
   `.claude/worktrees/`, and `.superpowers/`.
@@ -454,6 +490,16 @@ scaffold depends on:
 5. **Where the SDD ledger lives.** It resolves to `.superpowers/sdd/` under the top of the
    current worktree, so removing that worktree deletes it. `land-branch.sh` warns when it
    removes one.
+
+A Claude Code update can move three things the wave tooling depends on. They were
+observed on Claude Code 2.1.296:
+
+1. **A subagent worktree's path and branch:** `.claude/worktrees/agent-<id>` on
+   `worktree-agent-<id>`. `land-branch.sh` removes worktrees that match the path.
+2. **The `cwd` that a `SubagentStop` hook receives:** the subagent's own worktree.
+   `wave-implementer-stop.sh` reads it.
+3. **What `worktree.baseRef: "head"` and `.worktreeinclude` reach:** subagent worktrees
+   as well as `--worktree` sessions.
 
 Each one is a line or two in a skill file. The plugin installs under
 `~/.claude/plugins/cache/`, so `grep` finds them quickly. Install the plugin from one

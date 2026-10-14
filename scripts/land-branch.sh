@@ -2,15 +2,20 @@
 # land-branch.sh: land one finished branch on its base branch, safely.
 #
 # Usage:
-#   .claude/scripts/land-branch.sh <branch> <base> [-C <repo>]
-#   .claude/scripts/land-branch.sh --rebase-only <branch> <base> [-C <repo>]
+#   .claude/scripts/land-branch.sh [--check <cmd>] <branch> <base> [-C <repo>]
+#   .claude/scripts/land-branch.sh --rebase-only [--check <cmd>] <branch> <base> [-C <repo>]
 #
 # It rebases <branch> onto <base>, fast-forwards <base>, removes the branch's
 # worktree, and deletes the branch. It works whether or not either branch is
 # checked out, and in whichever worktree it is checked out.
 #
-# --rebase-only stops after the rebase. Run the tests on the rebased branch,
-# then run the script again without it to land.
+# --check runs <cmd> through sh in the rebased branch's checkout, after the
+# rebase and before the fast-forward. A failing check stops the landing, so
+# the base never moves to a combination that fails. Pass the project's full
+# test, lint, and typecheck command. A branch that is checked out nowhere is
+# checked in a temporary worktree, which holds no installed dependencies.
+#
+# --rebase-only stops after the rebase, and after the check when one is given.
 #
 # Why a script and not a sequence in CLAUDE.md: the written sequence failed in a
 # worktree ("already used by worktree"), and a failed step is where an agent
@@ -22,9 +27,11 @@
 #     git itself refuses when it would lose work.
 #   - land a branch whose worktree holds uncommitted or untracked files.
 #   - leave a rebase half done. A conflict aborts the rebase and stops.
-#   - remove a worktree outside .worktrees/ or worktrees/. Those belong to
-#     another session or to the harness. The commits land; the worktree and
-#     the branch stay.
+#   - remove a worktree outside .worktrees/, worktrees/, or the harness's
+#     subagent worktrees in .claude/worktrees/agent-*. Every other worktree
+#     belongs to another session. The commits land; the worktree and the
+#     branch stay. The harness locks a subagent worktree while its agent
+#     runs, and git refuses to remove a locked worktree.
 #
 # Exit codes: 0 landed. 1 refused, and nothing was lost. 2 usage error.
 
@@ -34,6 +41,7 @@ branch=""
 base=""
 repo="."
 rebase_only=0
+check=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -41,6 +49,9 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { echo "-C needs a repository path" >&2; exit 2; }
       repo=$2; shift 2 ;;
     --rebase-only) rebase_only=1; shift ;;
+    --check)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "--check needs a command" >&2; exit 2; }
+      check=$2; shift 2 ;;
     -h|--help)
       awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
       exit 0 ;;
@@ -56,7 +67,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$branch" ] || [ -z "$base" ]; then
-  echo "usage: land-branch.sh [--rebase-only] <branch> <base> [-C <repo>]" >&2
+  echo "usage: land-branch.sh [--rebase-only] [--check <cmd>] <branch> <base> [-C <repo>]" >&2
   exit 2
 fi
 
@@ -114,12 +125,39 @@ else
   say "rebased $branch onto $base"
 fi
 
+# --- 2. Check the rebased branch ---------------------------------------------
+if [ -n "$check" ]; then
+  scratch=""
+  where=$branch_wt
+  if [ -z "$where" ]; then
+    scratch=$(mktemp -d)
+    rmdir "$scratch"
+    g worktree add -q --detach "$scratch" "$branch" || refuse "could not create a temporary worktree to run the check in."
+    where=$scratch
+  fi
+  say "checking $branch: $check"
+  (cd "$where" && sh -c "$check")
+  check_code=$?
+  # No --force here either. A check that wrote untracked files into the
+  # temporary worktree leaves it in place, and the message names it.
+  if [ -n "$scratch" ] && ! g worktree remove "$scratch" >/dev/null 2>&1; then
+    say "kept the temporary worktree $scratch: the check left files in it"
+  fi
+  [ "$check_code" -eq 0 ] \
+    || refuse "the check failed on the rebased $branch (exit $check_code). $base did not move."
+  say "the check passed"
+fi
+
 if [ "$rebase_only" -eq 1 ]; then
-  echo "Rebased $branch onto $base. Nothing landed. Test the branch, then run again without --rebase-only."
+  if [ -n "$check" ]; then
+    echo "Rebased and checked $branch on $base. Nothing landed. Run again without --rebase-only to land."
+  else
+    echo "Rebased $branch onto $base. Nothing landed. Test the branch, then run again without --rebase-only."
+  fi
   exit 0
 fi
 
-# --- 2. Fast-forward the base ---------------------------------------------------
+# --- 3. Fast-forward the base ---------------------------------------------------
 if [ -n "$base_wt" ]; then
   # merge --ff-only refuses when it would overwrite local changes in that
   # checkout, so work in progress there is safe.
@@ -134,16 +172,16 @@ else
 fi
 say "fast-forwarded $base to $(g rev-parse --short "$base")"
 
-# --- 3. Remove the worktree, but only one this workflow owns ---------------------
+# --- 4. Remove the worktree, but only one this workflow owns ---------------------
 root=$(cd "$main_wt" && pwd -P)
 owned=0
 if [ -n "$branch_wt" ]; then
   wt_real=$(cd "$branch_wt" && pwd -P)
   case "$wt_real" in
-    "$root"/.worktrees/* | "$root"/worktrees/*) owned=1 ;;
+    "$root"/.worktrees/* | "$root"/worktrees/* | "$root"/.claude/worktrees/agent-*) owned=1 ;;
   esac
   if [ "$owned" -eq 0 ]; then
-    say "kept $branch_wt: it is not under .worktrees/, so another session or the harness owns it"
+    say "kept $branch_wt: it is not a wave or subagent worktree, so another session owns it"
     say "kept the branch $branch, because that worktree still has it checked out"
     echo "Landed $branch on $base."
     exit 0
@@ -157,7 +195,7 @@ if [ -n "$branch_wt" ]; then
   say "removed the worktree $branch_wt"
 fi
 
-# --- 4. Delete the branch ---------------------------------------------------------
+# --- 5. Delete the branch ---------------------------------------------------------
 # -d, never -D: git refuses to delete a branch that is not merged. Run it where
 # the base is checked out, because -d measures "merged" against HEAD.
 if [ -n "$base_wt" ]; then

@@ -8,7 +8,23 @@
     "pr": "",
     "sessionUrl": false
   },
+  "worktree": {
+    "baseRef": "head"
+  },
   "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git branch --show-current)",
+      "Bash(git worktree list:*)",
+      "Bash(.claude/scripts/wave-status.sh:*)",
+      "Bash(.claude/scripts/review-package.sh:*)"
+    ],
     "deny": [
       "Bash(git reset --hard:*)",
       "Bash(git clean:*)",
@@ -122,6 +138,17 @@
           {
             "type": "command",
             "command": "sh -c 'd=\"${CLAUDE_PROJECT_DIR:-$PWD}\"; exec \"$d/.claude/hooks/session-start-git-context.sh\"'"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "wave-implementer",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'd=\"${CLAUDE_PROJECT_DIR:-$PWD}\"; exec \"$d/.claude/hooks/wave-implementer-stop.sh\"'"
           }
         ]
       }

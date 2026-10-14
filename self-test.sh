@@ -15,6 +15,8 @@
 #   6. land-branch.sh lands a branch, and every refusal loses nothing.
 #   7. review-package.sh writes a correct package for the shell-less reviewer.
 #   8. CLAUDE-light.md is generated from CLAUDE-template.md, and both stay in budget.
+#   9. wave-status.sh reports each worktree's work and every overlap.
+#  10. wave-implementer-stop.sh sends back a wave implementer with uncommitted work.
 #
 # scripts/ is the payload that install.sh copies into a target repository, so
 # scaffold-only tooling lives here at the root and in dev/ instead.
@@ -168,6 +170,43 @@ PY
 [ -z "$env_report" ] \
   && ok "the Read deny rules cover secret files at any depth and spare .env.example" \
   || bad "the Read deny rules are wrong for: $env_report"
+
+# A wave implementer's worktree must start from the branch the wave lands on,
+# not from the remote default branch.
+[ "$(setting 'd["worktree"]["baseRef"]')" = "head" ] \
+  && ok "settings.json branches new worktrees from the current HEAD" \
+  || bad "settings.json does not set worktree.baseRef to head"
+[ "$(setting '[(g.get("matcher"), h["command"]) for g in d["hooks"]["SubagentStop"] for h in g["hooks"] if "wave-implementer-stop.sh" in h["command"]][0][0]')" = "wave-implementer" ] \
+  && ok "settings.json registers wave-implementer-stop.sh for wave-implementer" \
+  || bad "settings.json does not register wave-implementer-stop.sh under SubagentStop for wave-implementer"
+# An allow rule must never reach a command that a deny or ask rule guards.
+# Claude Code checks deny and ask first, but an overlap would still say that
+# the scaffold means to allow it.
+overlap=$(python3 - "$ROOT/settings.json" <<'PY2'
+import json, sys
+p = json.load(open(sys.argv[1]))["permissions"]
+# chr(40) is an open parenthesis. A literal one breaks bash 3.2, which parses
+# this heredoc inside a command substitution.
+paren = chr(40)
+def stem(r):
+    return r[:-1].split(paren, 1)[1].rstrip("*").rstrip(":").rstrip() if paren in r else r
+guarded = [stem(r) for r in p["deny"] + p["ask"] if r.startswith("Bash" + paren)]
+# Compare whole words: "git merge-base" is another command than "git merge".
+def reaches(a, b):
+    return a == b or a.startswith(b + " ") or b.startswith(a + " ")
+print(" ".join(r for r in p["allow"] if any(reaches(stem(r), g) for g in guarded)))
+PY2
+)
+[ -z "$overlap" ] && ok "no allow rule reaches a command that a deny or ask rule guards" \
+  || bad "these allow rules overlap a deny or ask rule: $overlap"
+grep -q '^isolation: worktree$' "$ROOT/agents/wave-implementer.md" \
+  && ok "wave-implementer declares isolation: worktree" \
+  || bad "wave-implementer does not declare isolation: worktree"
+# subagent-driven-development needs its implementer to commit on the
+# controller's own branch, so the plain implementer must not be isolated.
+grep -q '^isolation:' "$ROOT/agents/implementer.md" \
+  && bad "implementer declares isolation, which breaks subagent-driven development" \
+  || ok "implementer works in the controller's checkout"
 echo
 
 # --- 3. The subagent git hook ----------------------------------------------
@@ -497,6 +536,10 @@ if [ -x "$ROOT/install.sh" ]; then
     ".claude/agents/researcher.md" \
     ".claude/agents/reviewer.md" \
     ".claude/agents/implementer.md" \
+    ".claude/agents/wave-implementer.md" \
+    ".claude/hooks/wave-implementer-stop.sh" \
+    ".claude/scripts/wave-status.sh" \
+    ".worktreeinclude" \
     ".claude/skills/parallel-agent-safety/SKILL.md" \
     ".claude/skills/ste-writing/SKILL.md" \
     ".claude/scripts/check-claude-md.sh" \
@@ -539,6 +582,28 @@ PY
     bad "check-claude-md.sh failed on a filled install"
     "$target/.claude/scripts/check-claude-md.sh" "$target" 2>&1 | sed 's/^/          /'
   fi
+
+  # A background agent waits at every permission prompt, so the check warns
+  # when no allow rule covers the full test command, and is quiet once one does.
+  cp "$target/CLAUDE.md" "$tmp/manual.saved"
+  cp "$target/.claude/settings.json" "$tmp/settings.saved"
+  sed -i.bak 's/^| Test (full suite) | .*/| Test (full suite) | `npm test` |/' "$target/CLAUDE.md" && rm -f "$target/CLAUDE.md.bak"
+  case "$("$target/.claude/scripts/check-claude-md.sh" "$target" 2>&1)" in
+    *"no allow rule covers the full test command 'npm test'"*) ok "check-claude-md.sh warns when no allow rule covers the test command" ;;
+    *) bad "check-claude-md.sh did not warn about the missing allow rule for the test command" ;;
+  esac
+  python3 - "$target/.claude/settings.json" <<'PY2'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["permissions"]["allow"].append("Bash(npm test:*)")
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY2
+  case "$("$target/.claude/scripts/check-claude-md.sh" "$target" 2>&1)" in
+    *"an allow rule covers the full test command"*) ok "check-claude-md.sh accepts an allow rule for the test command" ;;
+    *) bad "check-claude-md.sh did not see the allow rule for the test command" ;;
+  esac
+  cp "$tmp/manual.saved" "$target/CLAUDE.md"
+  cp "$tmp/settings.saved" "$target/.claude/settings.json"
 
   # A GitHub Actions expression such as ${{ secrets.X }} is not a placeholder.
   cp "$target/CLAUDE.md" "$tmp/manual.saved"
@@ -950,6 +1015,28 @@ case "$out" in
   *"Other worktrees"*) bad "context hook listed its own checkout as another worktree when the path has a space" ;;
   *) ok "context hook recognises its own checkout when the path has a space" ;;
 esac
+# Two worktrees that change one file: a new session in either one must see
+# the collision before it starts. The hook finds wave-status.sh next to its
+# own directory, as it does in .claude/.
+ov_tmp="$ctx_tmp/overlap"
+mkdir -p "$ov_tmp/.claude/hooks" "$ov_tmp/.claude/scripts"
+cp "$CONTEXT_HOOK" "$ov_tmp/.claude/hooks/"
+cp "$ROOT/scripts/wave-status.sh" "$ov_tmp/.claude/scripts/"
+git -C "$ov_tmp" init -q -b main
+printf '.claude/\n.worktrees/\n' > "$ov_tmp/.gitignore"
+echo one > "$ov_tmp/shared.txt"
+git -C "$ov_tmp" add .gitignore shared.txt
+git -C "$ov_tmp" -c user.name=t -c user.email=t@t commit -qm init
+git -C "$ov_tmp" worktree add -q .worktrees/w1 -b w1
+git -C "$ov_tmp" worktree add -q .worktrees/w2 -b w2
+echo w1 > "$ov_tmp/.worktrees/w1/shared.txt"
+git -C "$ov_tmp/.worktrees/w1" -c user.name=t -c user.email=t@t commit -qam w1
+echo w2 > "$ov_tmp/.worktrees/w2/shared.txt"
+out=$(cd "$ov_tmp/.worktrees/w2" && CLAUDE_PROJECT_DIR="$ov_tmp" "$ov_tmp/.claude/hooks/session-start-git-context.sh" </dev/null 2>/dev/null)
+case "$out" in
+  *"more than one worktree"*"shared.txt: w1, w2"*) ok "context hook names a file that two worktrees change" ;;
+  *) bad "context hook did not report the file that two worktrees change" ;;
+esac
 out=$(cd /tmp && CLAUDE_PROJECT_DIR=/tmp "$CONTEXT_HOOK" </dev/null 2>/dev/null); code=$?
 [ "$code" -eq 0 ] && [ -z "$out" ] \
   && ok "context hook is silent outside a git repository" \
@@ -1130,6 +1217,80 @@ else
   bad "land: a branch rebased with --rebase-only did not land"
 fi
 
+# L11: --check runs in the rebased branch's worktree. A passing check lands.
+r="$land_tmp/l11"; new_repo "$r"
+git -C "$r" worktree add -q .worktrees/t11 -b t11 dev
+commit_in "$r/.worktrees/t11" a.txt a
+commit_in "$r" b.txt b
+if "$LAND" --check 'test -f a.txt && test -f b.txt' t11 dev -C "$r" >/dev/null 2>&1 \
+   && git -C "$r" cat-file -e dev:a.txt 2>/dev/null && [ -z "$(sha "$r" t11)" ]; then
+  ok "land: a passing --check on the rebased branch lands it"
+else
+  bad "land: a passing --check did not land the branch"
+fi
+
+# L12: a failing check stops the landing. The base does not move, and the
+# branch keeps its commits and its worktree.
+r="$land_tmp/l12"; new_repo "$r"
+git -C "$r" worktree add -q .worktrees/t12 -b t12 dev
+commit_in "$r/.worktrees/t12" a.txt a
+base_before=$(sha "$r" dev)
+"$LAND" --check 'exit 3' t12 dev -C "$r" >/dev/null 2>&1; code=$?
+if [ "$code" -eq 1 ] && [ "$(sha "$r" dev)" = "$base_before" ] \
+   && [ -d "$r/.worktrees/t12" ] && git -C "$r" cat-file -e t12:a.txt 2>/dev/null; then
+  ok "land: a failing --check refuses, and the base and the branch stay"
+else
+  bad "land: a failing --check did not stop the landing [exit $code]"
+fi
+
+# L13: a branch checked out nowhere is checked in a temporary worktree, and
+# --rebase-only with --check stops after the check.
+r="$land_tmp/l13"; new_repo "$r"
+git -C "$r" branch t13 dev
+git -C "$r" worktree add -q "$land_tmp/l13-scratch" t13
+commit_in "$land_tmp/l13-scratch" a.txt a
+git -C "$r" worktree remove "$land_tmp/l13-scratch"
+base_before=$(sha "$r" dev)
+if "$LAND" --rebase-only --check 'test -f a.txt' t13 dev -C "$r" >/dev/null 2>&1 \
+   && [ "$(sha "$r" dev)" = "$base_before" ] \
+   && [ "$(git -C "$r" worktree list | wc -l | tr -d ' ')" = "1" ]; then
+  ok "land: --check runs a branch with no worktree in a temporary one, and cleans it up"
+else
+  bad "land: --check on a branch with no worktree misbehaved"
+fi
+
+# L14: the harness puts a subagent's worktree in .claude/worktrees/agent-*.
+# Landing removes it. Any other worktree there belongs to a live session.
+r="$land_tmp/l14"; new_repo "$r"
+printf '.claude/worktrees/\n' >> "$r/.gitignore"
+git -C "$r" add .gitignore && git -C "$r" -c user.name=t -c user.email=t@t commit -qm ignore
+git -C "$r" worktree add -q .claude/worktrees/agent-abc -b worktree-agent-abc dev
+commit_in "$r/.claude/worktrees/agent-abc" a.txt a
+git -C "$r" worktree add -q .claude/worktrees/feature-x -b worktree-feature-x dev
+commit_in "$r/.claude/worktrees/feature-x" c.txt c
+"$LAND" worktree-agent-abc dev -C "$r" >/dev/null 2>&1
+"$LAND" worktree-feature-x dev -C "$r" >/dev/null 2>&1
+if [ ! -d "$r/.claude/worktrees/agent-abc" ] && [ -z "$(sha "$r" worktree-agent-abc)" ] \
+   && [ -d "$r/.claude/worktrees/feature-x" ] && [ -n "$(sha "$r" worktree-feature-x)" ] \
+   && git -C "$r" cat-file -e dev:c.txt 2>/dev/null; then
+  ok "land: a subagent worktree is removed, and a session worktree is kept"
+else
+  bad "land: wrong cleanup of the worktrees in .claude/worktrees/"
+fi
+
+# L15: a running agent's worktree is locked. Landing still lands the commits,
+# and git's refusal to remove a locked worktree keeps it in place.
+r="$land_tmp/l15"; new_repo "$r"
+git -C "$r" worktree add -q .claude/worktrees/agent-run -b worktree-agent-run dev
+commit_in "$r/.claude/worktrees/agent-run" a.txt a
+git -C "$r" worktree lock .claude/worktrees/agent-run
+"$LAND" worktree-agent-run dev -C "$r" >/dev/null 2>&1
+if [ -d "$r/.claude/worktrees/agent-run" ] && git -C "$r" cat-file -e dev:a.txt 2>/dev/null; then
+  ok "land: a locked subagent worktree is never removed"
+else
+  bad "land: a locked subagent worktree was removed, or the branch did not land"
+fi
+
 rm -rf "$land_tmp"
 echo
 
@@ -1202,6 +1363,93 @@ if grep -nE '[Ss]ection [0-9]' "$ROOT"/CLAUDE-*.md "$ROOT"/README*.md "$ROOT"/ag
 else
   ok "no file refers to a manual section by number"
 fi
+echo
+
+# --- 9. Wave status --------------------------------------------------------
+# wave-status.sh shows a collision while every branch is still unlanded.
+WAVE="$ROOT/scripts/wave-status.sh"
+echo "Wave status"
+ws_tmp=$(mktemp -d)
+r="$ws_tmp/r"; mkdir -p "$r"
+git -C "$r" init -q -b main
+printf '.worktrees/\n' > "$r/.gitignore"
+echo one > "$r/shared.txt"
+git -C "$r" add .gitignore shared.txt
+git -C "$r" -c user.name=t -c user.email=t@t commit -qm init
+git -C "$r" switch -qc dev
+git -C "$r" worktree add -q ".worktrees/with space" -b w1 dev
+git -C "$r" worktree add -q .worktrees/w2 -b w2 dev
+git -C "$r" worktree add -q .worktrees/w3 -b w3 dev
+echo w1 > "$r/.worktrees/with space/shared.txt"
+git -C "$r/.worktrees/with space" -c user.name=t -c user.email=t@t commit -qam w1
+echo w3 > "$r/.worktrees/w3/own.txt"
+git -C "$r/.worktrees/w3" add own.txt
+git -C "$r/.worktrees/w3" -c user.name=t -c user.email=t@t commit -qm w3
+out=$("$WAVE" -C "$r" --overlaps)
+[ -z "$out" ] && ok "wave-status: no overlap when each worktree changes its own files" \
+  || bad "wave-status: reported an overlap that does not exist: $out"
+echo w2 > "$r/.worktrees/w2/shared.txt"
+out=$("$WAVE" -C "$r" --overlaps)
+[ "$out" = "shared.txt: w1, w2" ] && ok "wave-status: an uncommitted change counts toward an overlap" \
+  || bad "wave-status: wrong overlap report: $out"
+# git lists worktrees in path order, and macOS resolves /var to /private/var,
+# so check each part of the report on its own.
+out=$("$WAVE" dev -C "$r")
+w1_block=$(printf '%s\n' "$out" | grep -A1 '^  w1  .*/.worktrees/with space$')
+w2_block=$(printf '%s\n' "$out" | grep -A1 '^  w2  ')
+case "$w1_block" in
+  *"ahead 1, behind 0, uncommitted 0"*) ok "wave-status: counts a worktree's commits, with a path that holds a space" ;;
+  *) bad "wave-status: wrong report for w1: $w1_block" ;;
+esac
+case "$w2_block" in
+  *"ahead 0, behind 0, uncommitted 1"*) ok "wave-status: counts a worktree's uncommitted changes" ;;
+  *) bad "wave-status: wrong report for w2: $w2_block" ;;
+esac
+"$WAVE" no-such-base -C "$r" >/dev/null 2>&1; code=$?
+[ "$code" -eq 1 ] && ok "wave-status: an unknown base is refused" \
+  || bad "wave-status: an unknown base exited $code, not 1"
+rm -rf "$ws_tmp"
+echo
+
+# --- 10. The wave-implementer stop hook ---------------------------------------
+# It sends a wave implementer back once when its own worktree holds
+# uncommitted work, and never traps an agent anywhere else.
+STOP_HOOK="$ROOT/hooks/wave-implementer-stop.sh"
+echo "Wave-implementer stop hook"
+st_tmp=$(mktemp -d)
+r="$st_tmp/r"; mkdir -p "$r"
+git -C "$r" init -q -b main
+printf '.claude/\n' > "$r/.gitignore"
+git -C "$r" add .gitignore
+git -C "$r" -c user.name=t -c user.email=t@t commit -qm init
+git -C "$r" worktree add -q .claude/worktrees/agent-x -b worktree-agent-x
+stop_payload() {
+  # $1 = agent type. $2 = stop_hook_active (true|false). $3 = cwd.
+  python3 -c 'import json, sys; print(json.dumps({"hook_event_name": "SubagentStop", "agent_id": "x", "agent_type": sys.argv[1], "stop_hook_active": sys.argv[2] == "true", "cwd": sys.argv[3]}))' "$1" "$2" "$3"
+}
+stop_case() {
+  # $1 = label. $2 = wanted exit code. $3..$5 = stop_payload arguments.
+  stop_payload "$3" "$4" "$5" | "$STOP_HOOK" >/dev/null 2>&1
+  code=$?
+  [ "$code" -eq "$2" ] && ok "stop hook: $1" || bad "stop hook: $1 [exit $code, wanted $2]"
+}
+wt="$r/.claude/worktrees/agent-x"
+stop_case "lets a wave implementer with a clean worktree stop" 0 wave-implementer false "$wt"
+echo wip > "$wt/wip.txt"
+stop_case "sends back a wave implementer with uncommitted work" 2 wave-implementer false "$wt"
+stop_case "lets it stop the second time, so it is never trapped" 0 wave-implementer true "$wt"
+stop_case "ignores every other agent type" 0 implementer false "$wt"
+echo wip > "$r/main-wip.txt"
+stop_case "says nothing in a main checkout, which may hold another session's work" 0 wave-implementer false "$r"
+printf 'not json' | "$STOP_HOOK" >/dev/null 2>&1; code=$?
+[ "$code" -eq 0 ] && ok "stop hook: a payload it cannot read lets the agent stop" \
+  || bad "stop hook: a payload it cannot read exited $code, not 0"
+msg=$(stop_payload wave-implementer false "$wt" | "$STOP_HOOK" 2>&1 >/dev/null)
+case "$msg" in
+  *wip.txt*"do not touch it"*) ok "stop hook: the message lists the changes and protects work the agent did not make" ;;
+  *) bad "stop hook: the message does not list the changes" ;;
+esac
+rm -rf "$st_tmp"
 echo
 
 # --- Report -----------------------------------------------------------------

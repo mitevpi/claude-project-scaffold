@@ -18,6 +18,8 @@ instead. The two files differ only in the Git section's branch model.
    session, so every line costs context in every turn. Move detail into `docs/` or a
    skill, and link it from here. Set CLAUDE_MD_LINE_BUDGET to change the check's limit.
 5. For a non-Claude agent, symlink `AGENTS.md` to this file. Do not keep two copies.
+6. Add an allow rule to `.claude/settings.json` for each test, lint, and typecheck
+   command, such as `"Bash(npm test:*)"`. A background agent waits at every prompt.
 -->
 
 This is the internal operating manual for this repository. Claude reads it first, in every
@@ -159,24 +161,24 @@ wave. These rules are absolute. They override any plan, skill, or subagent promp
   session-start hook lists uncommitted work and other worktrees. Work you did not make
   belongs to someone else: report it, and never stash, restore, or commit it.
 - **Sequential is the default.** Fan out only for genuinely independent subtasks, and say
-  why in one line first. Never fan out the tasks of a plan:
-  `subagent-driven-development` is sequential by design.
+  why in one line first. Run a plan's tasks in sequence, unless the owner approves a
+  plan wave that the skill offers.
 - **One writer per file** for the whole wave. Two subtasks that need one file are one
   subtask. Keep every hotspot yourself: config, routes, registries, lockfiles,
   migrations, `README.md`, and this file.
 - **At most {{MAX_PARALLEL_WRITERS: 3}} write-capable agents.** Read-only agents may go
   wider. A cheaper model needs a tighter scope, not a looser one.
-- **Confirm a clean tree first, and give every writing agent its own worktree.** A
-  worktree isolates files, not a database, a port, or a cache. Do not fan out writers at
-  all when worktrees are disabled.
+- **Confirm a clean tree first, and dispatch every writer as `wave-implementer`,** which
+  gets its own worktree. A worktree isolates files, not a database, a port, or a cache.
+  Never use agent teams for writers: their teammates share one working directory.
 - **A subagent commits its own work and nothing more.** It may read history, stage
   explicit paths, and commit. The hook blocks every other git operation, and
   `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` stops it from spawning a subagent.
-- **Grant tools. Do not request behaviour.** Use `researcher`, `reviewer`, and
-  `implementer` from `.claude/agents/`. "Do not edit" in a prompt is not a control.
-- **Land one branch at a time.** Read every diff yourself. Run the checks from the
-  Commands section after each branch. The wave ends when the combined result passes, not
-  when the agents return.
+- **Grant tools. Do not request behaviour.** Use `researcher`, `reviewer`, `implementer`,
+  and `wave-implementer` from `.claude/agents/`. "Do not edit" in a prompt is not a control.
+- **Land one branch at a time.** Run `wave-status.sh <base>` first. Read every diff
+  yourself. Land with `land-branch.sh --check "<the test, lint, and typecheck commands>"`.
+  The wave ends when the combined result passes, not when the agents return.
 
 ## Documentation
 

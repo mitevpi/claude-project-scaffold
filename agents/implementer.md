@@ -1,6 +1,6 @@
 ---
 name: implementer
-description: Writes code inside one explicit file scope. Use it for an implementation task in a parallel wave, and as the container for a Superpowers implementer prompt during subagent-driven development. Give it a named write scope and, for a parallel wave, its own git worktree. It runs tests. It commits its own work. It never performs a branch operation, a merge, or a push.
+description: Writes code inside one explicit file scope, in the orchestrator's own checkout. Use it as the container for a Superpowers implementer prompt during subagent-driven development, where each task must commit on the controller's branch. For a task in a parallel wave, use wave-implementer, which gets its own worktree. Give it a named write scope. It runs tests. It commits its own work. It never performs a branch operation, a merge, or a push.
 tools: Read, Write, Edit, Glob, Grep, Bash
 model: sonnet
 ---

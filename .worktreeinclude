@@ -1,0 +1,11 @@
+# Gitignored files that Claude Code copies into each worktree it creates:
+# "claude --worktree" sessions, desktop parallel sessions, and subagents with
+# "isolation: worktree", such as the wave-implementer. A file is copied only
+# when it matches a pattern here AND git ignores it, so a tracked file is never
+# duplicated. gitignore syntax.
+#
+# A worktree is a fresh checkout. Without these files, a test that reads local
+# configuration fails in the worktree and passes in the main checkout. List
+# only what the tests and the dev server need.
+.env
+.env.local

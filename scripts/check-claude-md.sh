@@ -110,6 +110,9 @@ done
 # mentions, and still pass.
 for pair in \
   ".claude/scripts/review-package.sh review-package" \
+  ".claude/scripts/wave-status.sh wave-status" \
+  ".claude/hooks/wave-implementer-stop.sh wave-implementer" \
+  ".claude/agents/wave-implementer.md wave-implementer" \
   ".claude/agents/researcher.md researcher" \
   ".claude/agents/reviewer.md reviewer" \
   ".claude/agents/implementer.md implementer" \
@@ -135,8 +138,8 @@ done
 # match, such as "git -C <path> reset --hard".
 if [ -f "$ROOT/.claude/settings.json" ]; then
   if command -v python3 >/dev/null 2>&1; then
-    settings_report=$(python3 - "$ROOT/.claude/settings.json" "$ROOT/.claude/settings.local.json" <<'PY'
-import json, sys
+    settings_report=$(python3 - "$ROOT/.claude/settings.json" "$ROOT/.claude/settings.local.json" "$MANUAL" "$ROOT" <<'PY'
+import json, os, re, sys
 try:
     d = json.load(open(sys.argv[1]))
 except ValueError:
@@ -190,6 +193,49 @@ if registered("SessionStart", "session-start-git-context.sh") is None:
     print("bad settings.json does not register session-start-git-context.sh under SessionStart")
 else:
     print("ok settings.json registers session-start-git-context.sh")
+
+# The wave-implementer must not finish with uncommitted work, and its worktree
+# must start from the branch the wave lands on.
+if os.path.isfile(os.path.join(sys.argv[4], ".claude/agents/wave-implementer.md")):
+    m = registered("SubagentStop", "wave-implementer-stop.sh")
+    if m is None:
+        print("bad settings.json does not register wave-implementer-stop.sh under SubagentStop. A wave implementer can finish with uncommitted work.")
+    elif m not in ("wave-implementer", "*", ""):
+        print("bad wave-implementer-stop.sh is registered with matcher %r. It must match wave-implementer." % m)
+    else:
+        print("ok settings.json registers wave-implementer-stop.sh for wave-implementer")
+    base_ref = effective("worktree").get("baseRef")
+    if base_ref != "head":
+        print("warn worktree.baseRef is %r, not \"head\", so a wave implementer's worktree starts from the remote default branch, not from the branch the wave lands on" % base_ref)
+
+# A background agent's permission prompt waits in the main session until
+# someone answers it, and a headless dontAsk run denies it. Without an allow
+# rule for the test command, every wave implementer stops at its first test.
+def covers(rule, cmd):
+    if rule in ("Bash", "Bash(*)"):
+        return True
+    if not (rule.startswith("Bash(") and rule.endswith(")")):
+        return False
+    inner = rule[5:-1]
+    for suffix in (":*", " *"):
+        if inner.endswith(suffix):
+            return cmd.startswith(inner[:-len(suffix)])
+    return cmd == inner
+try:
+    manual = open(sys.argv[3]).read()
+except OSError:
+    manual = ""
+# chr(96) is a backtick. A literal one here breaks bash 3.2, which parses
+# this heredoc inside a command substitution.
+tick = chr(96)
+row = re.search(r"^\|\s*Test \(full suite\)\s*\|\s*" + tick + "([^" + tick + "]+)" + tick, manual, re.M)
+if row and "{{" not in row.group(1):
+    test_cmd = row.group(1).strip()
+    allow = d.get("permissions", {}).get("allow", []) + local.get("permissions", {}).get("allow", [])
+    if any(covers(r, test_cmd) for r in allow):
+        print("ok an allow rule covers the full test command, so a background agent can run it")
+    else:
+        print("warn no allow rule covers the full test command %r. Every background agent stops at it until someone answers the prompt. Add \"Bash(%s:*)\" to permissions.allow" % (test_cmd, test_cmd))
 
 required = [
     "Bash(git reset --hard:*)",
@@ -246,7 +292,8 @@ fi
 # A hook that cannot execute exits 126, and Claude Code treats that as a
 # non-blocking error. The command runs anyway, so the hook fails open silently.
 hook="$ROOT/.claude/hooks/block-subagent-git.sh"
-for f in "$hook" "$ROOT/.claude/hooks/session-start-git-context.sh" "$ROOT/.claude/scripts/land-branch.sh"; do
+for f in "$hook" "$ROOT/.claude/hooks/session-start-git-context.sh" "$ROOT/.claude/hooks/wave-implementer-stop.sh" \
+         "$ROOT/.claude/scripts/land-branch.sh" "$ROOT/.claude/scripts/wave-status.sh"; do
   [ -f "$f" ] || continue
   if [ -x "$f" ]; then
     ok "${f#"$ROOT"/} is executable"

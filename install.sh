@@ -33,6 +33,7 @@
 #                           existing file rather than skipped (see below)
 #   agents/  hooks/  scripts/  skills/  -> <target>/.claude/
 #   docs/                -> <target>/docs/
+#   .worktreeinclude     -> <target>/.worktreeinclude
 #   and it appends the Claude and Superpowers block to <target>/.gitignore
 #
 # It never overwrites an existing file unless you pass --force. It reports
@@ -287,6 +288,7 @@ if [ "$update" -eq 1 ]; then
   fi
   # docs/ is project content once installed. Add only what is missing.
   copy_tree "$SRC/docs" "$TARGET/docs" >/dev/null
+  update_file "$SRC/.worktreeinclude" "$TARGET/.worktreeinclude" ".worktreeinclude"
 else
   echo "Installing the $variant variant into $TARGET"
   echo
@@ -297,6 +299,7 @@ else
     copy_tree "$SRC/$dir" "$TARGET/.claude/$dir"
   done
   copy_tree "$SRC/docs" "$TARGET/docs"
+  copy_file "$SRC/.worktreeinclude" "$TARGET/.worktreeinclude"
 fi
 
 # The version record is what makes a later --update possible.

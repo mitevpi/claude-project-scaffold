@@ -69,6 +69,17 @@ others=$(git worktree list --porcelain 2>/dev/null | awk -v top="$top" '
 if [ -n "$others" ]; then
   echo "- Other worktrees of this repository. Other sessions or agents may be working in them:"
   printf '%s\n' "$others" | head -20 | sed 's/^/    /'
+  # wave-status.sh sits next to this hook's directory, in .claude/scripts/.
+  # It names each file that two worktrees change, measured against the branch
+  # in the main worktree, so this session sees a collision before it starts.
+  status_script="$(dirname "$0")/../scripts/wave-status.sh"
+  if [ -x "$status_script" ]; then
+    overlaps=$("$status_script" --overlaps -C "$top" 2>/dev/null | head -10)
+    if [ -n "$overlaps" ]; then
+      echo "- Files that more than one worktree changes. Agree an owner before you edit one:"
+      printf '%s\n' "$overlaps" | sed 's/^/    /'
+    fi
+  fi
 fi
 
 exit 0
