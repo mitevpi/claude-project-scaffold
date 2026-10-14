@@ -35,6 +35,14 @@ fail=0
 # runner, and they must not depend on the identity of the person running them.
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
+# mk_tmp: a new temporary directory, or the whole run stops. A failed
+# mktemp would leave a test writing under "/". The explicit template under
+# $TMPDIR matters: on macOS a bare mktemp ignores TMPDIR and writes to
+# /var/folders, which Claude Code's sandbox denies.
+mk_tmp() {
+  mktemp -d "${TMPDIR:-/tmp}/scaffold-test.XXXXXX" || { echo "self-test: cannot create a temporary directory" >&2; kill -TERM $$; }
+}
+
 ok()   { printf '  ok    %s\n' "$1"; pass=$((pass + 1)); }
 bad()  { printf '  FAIL  %s\n' "$1"; fail=$((fail + 1)); }
 
@@ -113,6 +121,11 @@ for script in "$ROOT"/hooks/*.sh "$ROOT"/scripts/*.sh "$ROOT"/install.sh "$ROOT"
   done
   [ -z "$failed" ] && ok "$name parses under $shells" || bad "$name has a syntax error under$failed"
 done
+# On macOS a bare mktemp ignores TMPDIR and writes to /var/folders, which
+# Claude Code's sandbox denies. Every mktemp must name a template.
+bare=$(grep -nE 'mktemp( -d)?\)' "$ROOT"/hooks/*.sh "$ROOT"/scripts/*.sh "$ROOT"/install.sh "$ROOT"/self-test.sh | grep -v 'grep -nE')
+[ -z "$bare" ] && ok "every mktemp names a template under TMPDIR" \
+  || bad "a bare mktemp fails inside the sandbox on macOS: $bare"
 for py in "$ROOT"/dev/*.py; do
   python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$py" 2>/dev/null \
     && ok "${py#"$ROOT"/} parses" || bad "${py#"$ROOT"/} has a syntax error"
@@ -498,7 +511,7 @@ echo
 # Skipped until install.sh exists.
 if [ -x "$ROOT/install.sh" ]; then
   echo "End-to-end install"
-  tmp=$(mktemp -d)
+  tmp=$(mk_tmp)
   trap 'rm -rf "$tmp"' EXIT
 
   # install.sh installs the scaffold's committed HEAD, never its working
@@ -972,7 +985,7 @@ fi
 # session does not treat another session's uncommitted work as its own.
 CONTEXT_HOOK="$ROOT/hooks/session-start-git-context.sh"
 echo "Session-start git context"
-ctx_tmp=$(mktemp -d)
+ctx_tmp=$(mk_tmp)
 git -C "$ctx_tmp" init -q -b main
 echo a > "$ctx_tmp/a.txt"
 git -C "$ctx_tmp" add a.txt
@@ -1069,7 +1082,7 @@ commit_in() {
 }
 sha() { git -C "$1" rev-parse --verify -q "$2"; }
 
-land_tmp=$(mktemp -d)
+land_tmp=$(mk_tmp)
 
 # L1: a clean worktree lands, even when the base moved on, and nothing is left.
 r="$land_tmp/l1"; new_repo "$r"
@@ -1299,7 +1312,7 @@ echo
 # orchestrator writes the diff to a file and hands the reviewer the path.
 PACKAGE="$ROOT/scripts/review-package.sh"
 echo "Review package"
-pkg_tmp=$(mktemp -d)
+pkg_tmp=$(mk_tmp)
 git -C "$pkg_tmp" init -q -b main
 echo one > "$pkg_tmp/a.txt"; git -C "$pkg_tmp" add a.txt; git -C "$pkg_tmp" commit -qm "first commit"
 pkg_base=$(git -C "$pkg_tmp" rev-parse HEAD)
@@ -1369,7 +1382,7 @@ echo
 # wave-status.sh shows a collision while every branch is still unlanded.
 WAVE="$ROOT/scripts/wave-status.sh"
 echo "Wave status"
-ws_tmp=$(mktemp -d)
+ws_tmp=$(mk_tmp)
 r="$ws_tmp/r"; mkdir -p "$r"
 git -C "$r" init -q -b main
 printf '.worktrees/\n' > "$r/.gitignore"
@@ -1416,7 +1429,7 @@ echo
 # uncommitted work, and never traps an agent anywhere else.
 STOP_HOOK="$ROOT/hooks/wave-implementer-stop.sh"
 echo "Wave-implementer stop hook"
-st_tmp=$(mktemp -d)
+st_tmp=$(mk_tmp)
 r="$st_tmp/r"; mkdir -p "$r"
 git -C "$r" init -q -b main
 printf '.claude/\n' > "$r/.gitignore"

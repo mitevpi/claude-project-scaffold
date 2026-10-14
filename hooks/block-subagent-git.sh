@@ -139,7 +139,9 @@ fi
 # The heredoc feeds python3 directly, never through $(...): bash 3.2, which is
 # /bin/sh on macOS, misparses a heredoc with unbalanced parentheses inside a
 # command substitution.
-out=$(mktemp) || { [ "$caller" = sub ] && [ "$mentions_git" -eq 1 ] && block "The hook could not create a temporary file."; exit 0; }
+# An explicit template under $TMPDIR: on macOS a bare mktemp ignores TMPDIR
+# and writes to /var/folders, which Claude Code's sandbox denies.
+out=$(mktemp "${TMPDIR:-/tmp}/block-subagent-git.XXXXXX") || { [ "$caller" = sub ] && [ "$mentions_git" -eq 1 ] && block "The hook could not create a temporary file."; exit 0; }
 trap 'rm -f "$out"' EXIT
 
 HOOK_PAYLOAD=$payload HOOK_OUT=$out python3 - 2>/dev/null <<'PY'

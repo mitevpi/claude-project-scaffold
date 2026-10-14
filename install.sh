@@ -122,7 +122,9 @@ fi
 # --- Source: the scaffold's committed HEAD --------------------------------------
 if git -C "$SCAFFOLD" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   new_commit=$(git -C "$SCAFFOLD" rev-parse HEAD)
-  SRC=$(mktemp -d)
+  # An explicit template under $TMPDIR: on macOS a bare mktemp ignores TMPDIR
+  # and writes to /var/folders, which Claude Code's sandbox denies.
+  SRC=$(mktemp -d "${TMPDIR:-/tmp}/claude-scaffold.XXXXXX")
   trap 'rm -rf "$SRC"' EXIT
   git -C "$SCAFFOLD" archive HEAD | tar -x -C "$SRC"
   if [ -n "$(git -C "$SCAFFOLD" status --porcelain)" ]; then

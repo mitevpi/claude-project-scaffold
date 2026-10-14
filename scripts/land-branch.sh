@@ -97,6 +97,15 @@ repo=$main_wt
 
 is_dirty() { [ -n "$(git -C "$1" status --porcelain)" ]; }
 
+# new_scratch: a free path for a temporary worktree. git creates the
+# directory itself. The explicit template under $TMPDIR matters: on macOS a
+# bare mktemp ignores TMPDIR and writes to /var/folders, which Claude Code's
+# sandbox denies.
+new_scratch() {
+  d=$(mktemp -d "${TMPDIR:-/tmp}/land-branch.XXXXXX") || return 1
+  rmdir "$d" && printf '%s\n' "$d"
+}
+
 if [ -n "$branch_wt" ] && is_dirty "$branch_wt"; then
   git -C "$branch_wt" status --short >&2
   refuse "$branch_wt holds uncommitted or untracked work. Commit it, or ask the owner."
@@ -111,8 +120,7 @@ else
   if [ -z "$where" ]; then
     # The branch is checked out nowhere. Rebase it in a temporary worktree, so
     # that no checkout that someone else may be using ever moves.
-    scratch=$(mktemp -d)
-    rmdir "$scratch"
+    scratch=$(new_scratch)
     g worktree add -q "$scratch" "$branch" || refuse "could not create a temporary worktree to rebase in."
     where=$scratch
   fi
@@ -130,8 +138,7 @@ if [ -n "$check" ]; then
   scratch=""
   where=$branch_wt
   if [ -z "$where" ]; then
-    scratch=$(mktemp -d)
-    rmdir "$scratch"
+    scratch=$(new_scratch)
     g worktree add -q --detach "$scratch" "$branch" || refuse "could not create a temporary worktree to run the check in."
     where=$scratch
   fi

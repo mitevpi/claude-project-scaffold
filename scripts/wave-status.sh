@@ -69,7 +69,9 @@ if [ -z "$base" ]; then
 fi
 base_sha=$(g rev-parse --verify -q "$base^{commit}") || { echo "unknown base: $base" >&2; exit 1; }
 
-touched=$(mktemp)
+# An explicit template under $TMPDIR: on macOS a bare mktemp ignores TMPDIR
+# and writes to /var/folders, which Claude Code's sandbox denies.
+touched=$(mktemp "${TMPDIR:-/tmp}/wave-status.XXXXXX") || { echo "could not create a temporary file" >&2; exit 2; }
 trap 'rm -f "$touched"' EXIT
 report=""
 
