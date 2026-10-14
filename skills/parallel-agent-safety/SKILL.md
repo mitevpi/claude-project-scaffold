@@ -192,8 +192,8 @@ Step 2 did not plan is a scope breach. Find the agent that left its scope before
 land anything.
 
 Integrate one branch at a time. Never merge two at once. Take each branch name from the
-agent's report, or from `wave-status.sh`. A wave implementer's branch is
-`worktree-agent-<id>`.
+`worktreeBranch` line that the Agent tool returns with the agent's report, or from
+`wave-status.sh`. A wave implementer's branch is `worktree-agent-<id>`.
 
 For each branch:
 
